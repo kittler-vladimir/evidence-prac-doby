@@ -1,10 +1,11 @@
 from django.contrib.auth.decorators import login_required
 from django.contrib import messages
+from django.core.exceptions import ValidationError
 from django.shortcuts import render, redirect, get_object_or_404
 from django.http import HttpResponseForbidden
 from django.utils import timezone
 
-from .models import ZadostODovolenou, ZustatekDovolene
+from .models import TypDovolene, ZadostODovolenou, ZustatekDovolene
 from .forms import ZadostODovolenoForm, ZamitnutiForm
 
 
@@ -12,10 +13,26 @@ from .forms import ZadostODovolenoForm, ZamitnutiForm
 def moje_zadosti(request):
     """Přehled vlastních žádostí o dovolenou."""
     employee = request.user.employee
-    zadosti = ZadostODovolenou.objects.filter(employee=employee).order_by("-vytvoreno")
+    zadosti = ZadostODovolenou.objects.filter(
+        employee=employee
+    ).select_related("typ").order_by("-vytvoreno")
 
     rok = timezone.localdate().year
-    zustatky = ZustatekDovolene.objects.filter(employee=employee, rok=rok).first()
+    dnes = timezone.localdate()
+    zustatky = list(
+        ZustatekDovolene.objects.filter(employee=employee, rok=rok).select_related("typ")
+    )
+
+    # Zobrazit i virtuální (dosud nezaložený) zůstatek pro globálně nárokované
+    # typy dovolené (např. indispoziční volno), na které má zaměstnanec nárok
+    # už teď, i když zatím nepodal žádnou žádost.
+    existujici_typy = {z.typ_id for z in zustatky}
+    for typ in TypDovolene.objects.filter(je_indispozicni_volno=True, aktivni=True):
+        if typ.pk not in existujici_typy:
+            zustatky.append(ZustatekDovolene(
+                employee=employee, rok=rok, typ=typ,
+                narok_hodin=typ.vychozi_narok(dnes), cerpano_hodin=0,
+            ))
 
     return render(request, "leaves/moje_zadosti.html", {
         "zadosti": zadosti,
@@ -93,7 +110,12 @@ def schvalit(request, pk):
         messages.warning(request, "Žádost již byla vyřízena.")
         return redirect("leaves:ke_schvaleni")
 
-    zadost.schval(employee)
+    try:
+        zadost.schval(employee)
+    except ValidationError as e:
+        messages.error(request, "; ".join(e.messages))
+        return redirect("leaves:ke_schvaleni")
+
     messages.success(request, f"Žádost {zadost.employee.jmeno} byla schválena.")
     return redirect("leaves:ke_schvaleni")
 
