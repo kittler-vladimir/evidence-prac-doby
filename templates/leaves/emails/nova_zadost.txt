@@ -1,0 +1,14 @@
+Dobrý den,
+
+zaměstnanec {{ zadost.employee.jmeno }} podal/a žádost o dovolenou.
+
+Typ: {{ zadost.typ.nazev }}
+Od: {{ zadost.datum_od|date:"j. F Y" }}
+Do: {{ zadost.datum_do|date:"j. F Y" }}
+Počet hodin: {{ zadost.pocet_hodin }}h
+
+{% if zadost.poznamka_zamestnance %}Poznámka: {{ zadost.poznamka_zamestnance }}{% endif %}
+
+Prosím přihlaste se do systému a žádost vyřiďte.
+
+-- Evidence pracovní doby

@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Ke schválení{% endblock %}
+
+{% block content %}
+<h4 class="mb-3"><i class="bi bi-check2-circle"></i> Žádosti ke schválení</h4>
+
+<div class="card shadow-sm">
+  <div class="table-responsive">
+    <table class="table table-hover mb-0">
+      <thead class="table-light">
+        <tr>
+          <th>Zaměstnanec</th>
+          <th>Typ</th>
+          <th>Od</th>
+          <th>Do</th>
+          <th>Hodin</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for z in zadosti %}
+        <tr>
+          <td>{{ z.employee.jmeno }}</td>
+          <td>{{ z.typ.zkratka }}</td>
+          <td>{{ z.datum_od|date:"j. n. Y" }}</td>
+          <td>{{ z.datum_do|date:"j. n. Y" }}</td>
+          <td>{{ z.pocet_hodin }}h</td>
+          <td class="text-end">
+            <a href="{% url 'leaves:detail_zadosti' z.pk %}" class="btn btn-sm btn-primary">Posoudit</a>
+          </td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="6" class="text-center text-muted py-3">Žádné žádosti ke schválení.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% load crispy_forms_tags %}
+{% block title %}Přihlášení{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-md-5 col-lg-4">
+    <div class="card shadow-sm mt-5">
+      <div class="card-body p-4">
+        <h4 class="text-center mb-4"><i class="bi bi-clock-history"></i> Evidence pracovní doby</h4>
+        <form method="post">
+          {% csrf_token %}
+          {{ form|crispy }}
+          <button type="submit" class="btn btn-primary w-100 mt-2">Přihlásit se</button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

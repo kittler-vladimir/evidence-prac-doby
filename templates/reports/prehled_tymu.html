@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Přehled týmu{% endblock %}
+
+{% block content %}
+<h4 class="mb-3"><i class="bi bi-people"></i> Přehled týmu – {{ mesic }}/{{ rok }}</h4>
+
+<div class="card shadow-sm">
+  <div class="table-responsive">
+    <table class="table table-hover mb-0">
+      <thead class="table-light">
+        <tr>
+          <th>Zaměstnanec</th>
+          <th>Oddělení</th>
+          <th>Odpracováno</th>
+          <th>Přesčas</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for d in data %}
+        <tr>
+          <td>{{ d.employee.jmeno }}</td>
+          <td>{{ d.employee.oddeleni }}</td>
+          <td>{{ d.odpracovano_h }}h {{ d.odpracovano_m }}min</td>
+          <td>{{ d.prescos_h }}h {{ d.prescos_m }}min</td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="4" class="text-center text-muted py-3">Žádná data.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

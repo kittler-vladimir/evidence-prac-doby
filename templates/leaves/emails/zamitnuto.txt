@@ -1,0 +1,12 @@
+Dobrý den {{ zadost.employee.jmeno }},
+
+Vaše žádost o dovolenou byla zamítnuta.
+
+Typ: {{ zadost.typ.nazev }}
+Od: {{ zadost.datum_od|date:"j. F Y" }}
+Do: {{ zadost.datum_do|date:"j. F Y" }}
+Zamítl/a: {{ zadost.schvaleno_kym.jmeno }}
+
+{% if zadost.poznamka_schvalovatele %}Důvod: {{ zadost.poznamka_schvalovatele }}{% endif %}
+
+-- Evidence pracovní doby

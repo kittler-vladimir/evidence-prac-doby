@@ -1,0 +1,11 @@
+Dobrý den {{ zadost.employee.jmeno }},
+
+Vaše žádost o dovolenou byla schválena.
+
+Typ: {{ zadost.typ.nazev }}
+Od: {{ zadost.datum_od|date:"j. F Y" }}
+Do: {{ zadost.datum_do|date:"j. F Y" }}
+Počet hodin: {{ zadost.pocet_hodin }}h
+Schválil/a: {{ zadost.schvaleno_kym.jmeno }}
+
+-- Evidence pracovní doby

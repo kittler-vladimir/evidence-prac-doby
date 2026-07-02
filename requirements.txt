@@ -1,0 +1,14 @@
+Django==5.0.6
+psycopg2-binary==2.9.9
+django-environ==0.11.2
+Pillow==10.3.0
+django-crispy-forms==2.1
+crispy-bootstrap5==2024.2
+django-extensions==3.2.3
+celery==5.4.0
+redis==5.0.6
+django-celery-beat==2.6.0
+openpyxl==3.1.4
+weasyprint==62.3
+holidays==0.48
+python-dateutil==2.9.0

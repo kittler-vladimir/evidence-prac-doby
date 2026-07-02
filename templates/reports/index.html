@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Reporty{% endblock %}
+
+{% block content %}
+<h4 class="mb-3"><i class="bi bi-bar-chart"></i> Reporty</h4>
+
+<div class="row g-3">
+  <div class="col-md-4">
+    <a href="{% url 'reports:prehled_tymu' %}" class="text-decoration-none">
+      <div class="card shadow-sm h-100">
+        <div class="card-body text-center py-4">
+          <i class="bi bi-people text-primary" style="font-size:2rem"></i>
+          <h6 class="mt-2 mb-0">Přehled týmu</h6>
+        </div>
+      </div>
+    </a>
+  </div>
+  <div class="col-md-4">
+    <a href="{% url 'reports:export_xlsx' %}" class="text-decoration-none">
+      <div class="card shadow-sm h-100">
+        <div class="card-body text-center py-4">
+          <i class="bi bi-file-earmark-excel text-success" style="font-size:2rem"></i>
+          <h6 class="mt-2 mb-0">Export výkazu (XLSX)</h6>
+        </div>
+      </div>
+    </a>
+  </div>
+</div>
+{% endblock %}

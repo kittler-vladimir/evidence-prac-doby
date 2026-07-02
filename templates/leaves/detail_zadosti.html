@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% load crispy_forms_tags %}
+{% block title %}Žádost o dovolenou{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-md-7">
+    <div class="card shadow-sm">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <strong>Žádost o dovolenou – {{ zadost.employee.jmeno }}</strong>
+        {% if zadost.stav == "ceka" %}
+          <span class="badge bg-warning text-dark">{{ zadost.get_stav_display }}</span>
+        {% elif zadost.stav == "schvaleno" %}
+          <span class="badge bg-success">{{ zadost.get_stav_display }}</span>
+        {% elif zadost.stav == "zamitnuto" %}
+          <span class="badge bg-danger">{{ zadost.get_stav_display }}</span>
+        {% else %}
+          <span class="badge bg-secondary">{{ zadost.get_stav_display }}</span>
+        {% endif %}
+      </div>
+      <div class="card-body">
+        <dl class="row mb-0">
+          <dt class="col-sm-4">Typ</dt>
+          <dd class="col-sm-8">{{ zadost.typ.nazev }}</dd>
+
+          <dt class="col-sm-4">Od – do</dt>
+          <dd class="col-sm-8">{{ zadost.datum_od|date:"j. n. Y" }} – {{ zadost.datum_do|date:"j. n. Y" }}</dd>
+
+          <dt class="col-sm-4">Počet hodin</dt>
+          <dd class="col-sm-8">{{ zadost.pocet_hodin }}h</dd>
+
+          <dt class="col-sm-4">Schvalovatel</dt>
+          <dd class="col-sm-8">{{ zadost.schvalovatele.jmeno|default:"—" }}</dd>
+
+          {% if zadost.poznamka_zamestnance %}
+          <dt class="col-sm-4">Poznámka zaměstnance</dt>
+          <dd class="col-sm-8">{{ zadost.poznamka_zamestnance }}</dd>
+          {% endif %}
+
+          {% if zadost.poznamka_schvalovatele %}
+          <dt class="col-sm-4">Poznámka schvalovatele</dt>
+          <dd class="col-sm-8">{{ zadost.poznamka_schvalovatele }}</dd>
+          {% endif %}
+        </dl>
+
+        {% if je_schvalovatel and zadost.stav == "ceka" %}
+        <hr>
+        <div class="d-flex gap-2 mb-3">
+          <form method="post" action="{% url 'leaves:schvalit' zadost.pk %}">
+            {% csrf_token %}
+            <button type="submit" class="btn btn-success">
+              <i class="bi bi-check-lg"></i> Schválit
+            </button>
+          </form>
+          <button type="button" class="btn btn-danger" data-bs-toggle="collapse" data-bs-target="#zamitnoutForm">
+            <i class="bi bi-x-lg"></i> Zamítnout
+          </button>
+        </div>
+        <div class="collapse" id="zamitnoutForm">
+          <form method="post" action="{% url 'leaves:zamitnou' zadost.pk %}">
+            {% csrf_token %}
+            {{ zamitnutí_form|crispy }}
+            <button type="submit" class="btn btn-danger">Potvrdit zamítnutí</button>
+          </form>
+        </div>
+        {% endif %}
+
+        {% if zadost.employee.user == request.user and zadost.stav == "ceka" %}
+        <hr>
+        <form method="post" action="{% url 'leaves:stornovat' zadost.pk %}">
+          {% csrf_token %}
+          <button type="submit" class="btn btn-outline-secondary">Stornovat žádost</button>
+        </form>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

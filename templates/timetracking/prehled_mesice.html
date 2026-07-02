@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}Měsíční výkaz{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h4 class="mb-0"><i class="bi bi-calendar3"></i> Výkaz – {{ mesic }}/{{ rok }}</h4>
+  <a href="{% url 'reports:export_xlsx' %}?rok={{ rok }}&mesic={{ mesic }}" class="btn btn-outline-success">
+    <i class="bi bi-file-earmark-excel"></i> Export XLSX
+  </a>
+</div>
+
+<div class="row g-3 mb-3">
+  <div class="col-md-3">
+    <div class="card shadow-sm text-center py-3">
+      <div class="fs-4 fw-bold text-primary">{% widthratio celkem_odpr 60 1 %}h</div>
+      <small class="text-muted">Odpracováno celkem</small>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="card shadow-sm text-center py-3">
+      <div class="fs-4 fw-bold text-warning">{% widthratio celkem_prescos 60 1 %}h</div>
+      <small class="text-muted">Přesčas celkem</small>
+    </div>
+  </div>
+</div>
+
+<div class="card shadow-sm">
+  <div class="table-responsive">
+    <table class="table table-hover mb-0">
+      <thead class="table-light">
+        <tr>
+          <th>Datum</th>
+          <th>Odpracováno</th>
+          <th>Přesčas</th>
+          <th>Svátek/Víkend</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for s in souhrny %}
+        <tr {% if s.je_svatek or s.je_vikend %}class="table-secondary"{% endif %}>
+          <td>{{ s.datum|date:"j. n. Y (D)" }}</td>
+          <td>{% widthratio s.odpracovane_minuty 60 1 %}h</td>
+          <td>
+            {% if s.prescos_minuty > 0 %}
+              <span class="badge bg-warning text-dark">+{% widthratio s.prescos_minuty 60 1 %}h</span>
+            {% elif s.prescos_minuty < 0 %}
+              <span class="badge bg-danger">{% widthratio s.prescos_minuty 60 1 %}h</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if s.je_svatek %}<span class="badge bg-info">Svátek</span>{% endif %}
+            {% if s.je_vikend %}<span class="badge bg-secondary">Víkend</span>{% endif %}
+          </td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="4" class="text-center text-muted py-3">Žádné záznamy.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Profil{% endblock %}
+
+{% block content %}
+<div class="card shadow-sm">
+  <div class="card-header"><strong><i class="bi bi-person-circle"></i> Profil</strong></div>
+  <div class="card-body">
+    <dl class="row mb-0">
+      <dt class="col-sm-3">Jméno</dt>
+      <dd class="col-sm-9">{{ employee.jmeno }}</dd>
+
+      <dt class="col-sm-3">E-mail</dt>
+      <dd class="col-sm-9">{{ employee.email }}</dd>
+
+      <dt class="col-sm-3">Osobní číslo</dt>
+      <dd class="col-sm-9">{{ employee.osobni_cislo }}</dd>
+
+      <dt class="col-sm-3">Oddělení</dt>
+      <dd class="col-sm-9">{{ employee.oddeleni }}</dd>
+
+      <dt class="col-sm-3">Odbor</dt>
+      <dd class="col-sm-9">{{ employee.oddeleni.odbor }}</dd>
+
+      <dt class="col-sm-3">Sekce</dt>
+      <dd class="col-sm-9">{{ employee.oddeleni.odbor.sekce }}</dd>
+
+      <dt class="col-sm-3">Typ úvazku</dt>
+      <dd class="col-sm-9">{{ employee.typ_uvazku }}</dd>
+
+      <dt class="col-sm-3">Datum nástupu</dt>
+      <dd class="col-sm-9">{{ employee.datum_nastupu|date:"j. n. Y" }}</dd>
+
+      <dt class="col-sm-3">Telefon</dt>
+      <dd class="col-sm-9">{{ employee.telefon|default:"—" }}</dd>
+    </dl>
+  </div>
+</div>
+{% endblock %}
