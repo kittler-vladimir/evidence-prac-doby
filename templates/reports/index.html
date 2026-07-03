@@ -16,6 +16,26 @@
     </a>
   </div>
   <div class="col-md-4">
+    <a href="{% url 'reports:prehled_pritomnosti' %}" class="text-decoration-none">
+      <div class="card shadow-sm h-100">
+        <div class="card-body text-center py-4">
+          <i class="bi bi-person-check text-info" style="font-size:2rem"></i>
+          <h6 class="mt-2 mb-0">Denní přítomnost</h6>
+        </div>
+      </div>
+    </a>
+  </div>
+  <div class="col-md-4">
+    <a href="{% url 'reports:vyhledat_zamestnance' %}" class="text-decoration-none">
+      <div class="card shadow-sm h-100">
+        <div class="card-body text-center py-4">
+          <i class="bi bi-search text-secondary" style="font-size:2rem"></i>
+          <h6 class="mt-2 mb-0">Vyhledat zaměstnance</h6>
+        </div>
+      </div>
+    </a>
+  </div>
+  <div class="col-md-4">
     <a href="{% url 'reports:export_xlsx' %}" class="text-decoration-none">
       <div class="card shadow-sm h-100">
         <div class="card-body text-center py-4">

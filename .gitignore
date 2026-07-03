@@ -7,3 +7,4 @@ staticfiles/
 media/
 *.log
 .DS_Store
+.claude/*.lock

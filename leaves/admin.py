@@ -1,17 +1,32 @@
 from django.contrib import admin
-from .models import TypDovolene, ZustatekDovolene, ZadostODovolenou
+from .models import (
+    TypDovolene,
+    NarokIndispozicnihoVolna,
+    ZustatekDovolene,
+    ZadostODovolenou,
+)
 
 
 @admin.register(TypDovolene)
 class TypDovoleneAdmin(admin.ModelAdmin):
-    list_display = ["zkratka", "nazev", "odecita_ze_zustatku", "aktivni"]
+    list_display = [
+        "zkratka", "nazev", "odecita_ze_zustatku", "je_indispozicni_volno",
+        "kategorie_pro_prehled", "aktivni",
+    ]
     list_editable = ["aktivni"]
+    list_filter = ["kategorie_pro_prehled"]
+
+
+@admin.register(NarokIndispozicnihoVolna)
+class NarokIndispozicnihoVolnaAdmin(admin.ModelAdmin):
+    list_display = ["platne_od", "hodin"]
+    ordering = ["-platne_od"]
 
 
 @admin.register(ZustatekDovolene)
 class ZustatekDovoleneAdmin(admin.ModelAdmin):
-    list_display = ["employee", "rok", "narok_hodin", "cerpano_hodin", "zbyvajici_hodin"]
-    list_filter = ["rok"]
+    list_display = ["employee", "rok", "typ", "narok_hodin", "cerpano_hodin", "zbyvajici_hodin"]
+    list_filter = ["rok", "typ"]
     search_fields = ["employee__user__last_name", "employee__osobni_cislo"]
 
 

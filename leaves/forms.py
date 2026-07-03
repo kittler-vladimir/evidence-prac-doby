@@ -1,5 +1,5 @@
 from django import forms
-from .models import ZadostODovolenou, TypDovolene
+from .models import ZadostODovolenou, TypDovolene, ZustatekDovolene
 
 
 class ZadostODovolenoForm(forms.ModelForm):
@@ -25,13 +25,12 @@ class ZadostODovolenoForm(forms.ModelForm):
             if datum_do < datum_od:
                 raise forms.ValidationError("Datum do musí být po datu od.")
 
-            # Kontrola dostatku zůstatku dovolené
+            # Kontrola dostatku zůstatku
             typ = cleaned.get("typ")
             if typ and typ.odecita_ze_zustatku and self.employee:
-                from .models import ZustatekDovolene
                 rok = datum_od.year
                 zustatek = ZustatekDovolene.objects.filter(
-                    employee=self.employee, rok=rok
+                    employee=self.employee, rok=rok, typ=typ
                 ).first()
 
                 # Spočítat hodiny
@@ -43,15 +42,19 @@ class ZadostODovolenoForm(forms.ModelForm):
                 temp.vypocitej_hodiny()
 
                 if zustatek:
-                    if zustatek.zbyvajici_hodin < temp.pocet_hodin:
-                        raise forms.ValidationError(
-                            f"Nedostatečný zůstatek dovolené. "
-                            f"Zbývá {zustatek.zbyvajici_hodin}h, "
-                            f"žádáte {temp.pocet_hodin}h."
-                        )
+                    zbyva = zustatek.zbyvajici_hodin
+                elif typ.je_indispozicni_volno:
+                    # Zůstatek ještě nebyl založen — virtuální nárok z globálního nastavení.
+                    zbyva = typ.vychozi_narok(datum_od)
                 else:
                     raise forms.ValidationError(
-                        f"Pro rok {rok} není nastaven nárok na dovolenou."
+                        f"Pro rok {rok} není nastaven nárok na {typ.nazev.lower()}."
+                    )
+
+                if zbyva < temp.pocet_hodin:
+                    raise forms.ValidationError(
+                        f"Nedostatečný zůstatek. "
+                        f"Zbývá {zbyva}h, žádáte {temp.pocet_hodin}h."
                     )
 
         return cleaned
