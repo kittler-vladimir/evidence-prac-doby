@@ -36,6 +36,18 @@
             <i class="bi bi-calendar-check"></i> Dovolená
           </a>
         </li>
+        {% if user.employee or user.is_staff %}
+        <li class="nav-item">
+          <a class="nav-link" href="{% url 'reports:prehled_pritomnosti' %}">
+            <i class="bi bi-person-check"></i> Přítomnost
+          </a>
+        </li>
+        <li class="nav-item">
+          <a class="nav-link" href="{% url 'reports:vyhledat_zamestnance' %}">
+            <i class="bi bi-search"></i> Vyhledat
+          </a>
+        </li>
+        {% endif %}
         {% if user.employee.oddeleni.vedouci == user.employee or user.is_staff %}
         <li class="nav-item">
           <a class="nav-link" href="{% url 'leaves:ke_schvaleni' %}">

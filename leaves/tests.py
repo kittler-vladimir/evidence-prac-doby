@@ -51,6 +51,7 @@ class IndispozicniVolnoTestCase(TestCase):
         self.typ_iv = TypDovolene.objects.create(
             nazev="Indispoziční volno", zkratka="IV",
             odecita_ze_zustatku=True, je_indispozicni_volno=True,
+            kategorie_pro_prehled=TypDovolene.KategoriePrehled.INDISPOZICNI_VOLNO,
         )
         NarokIndispozicnihoVolna.objects.create(hodin=Decimal("40.00"), platne_od=date(2026, 1, 1))
 
@@ -142,3 +143,21 @@ class IndispozicniVolnoTestCase(TestCase):
         iv_zustatek = next(z for z in zustatky if z.typ_id == self.typ_iv.pk)
         self.assertEqual(iv_zustatek.narok_hodin, Decimal("40.00"))
         self.assertIsNone(iv_zustatek.pk)
+
+    def test_kategorie_pro_prehled_musi_odpovidat_je_indispozicni_volno(self):
+        """Typ s je_indispozicni_volno=True musí mít kategorii INDISPOZICNI_VOLNO a naopak."""
+        nesouhlasny = TypDovolene(
+            nazev="Nesouhlasny typ", zkratka="NS",
+            je_indispozicni_volno=True,
+            kategorie_pro_prehled=TypDovolene.KategoriePrehled.JINA,
+        )
+        with self.assertRaises(ValidationError):
+            nesouhlasny.full_clean()
+
+        opacne_nesouhlasny = TypDovolene(
+            nazev="Opacne nesouhlasny", zkratka="ON",
+            je_indispozicni_volno=False,
+            kategorie_pro_prehled=TypDovolene.KategoriePrehled.INDISPOZICNI_VOLNO,
+        )
+        with self.assertRaises(ValidationError):
+            opacne_nesouhlasny.full_clean()

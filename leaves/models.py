@@ -8,6 +8,15 @@ from django.utils import timezone
 
 class TypDovolene(models.Model):
     """Číselník typů absence (dovolená, nemoc, sick day, OČR...)."""
+
+    class KategoriePrehled(models.TextChoices):
+        DOVOLENA = "DOVOLENA", _("Dovolená")
+        NEMOC = "NEMOC", _("Nemoc")
+        INDISPOZICNI_VOLNO = "INDISPOZICNI_VOLNO", _("Indispoziční volno")
+        SLUZEBNI_VOLNO = "SLUZEBNI_VOLNO", _("Služební volno")
+        OCR = "OCR", _("Ošetřování člena rodiny")
+        JINA = "JINA", _("Jiná absence")
+
     nazev = models.CharField(_("název"), max_length=100)
     zkratka = models.CharField(_("zkratka"), max_length=10)
     odecita_ze_zustatku = models.BooleanField(
@@ -23,6 +32,16 @@ class TypDovolene(models.Model):
             "nastavení (NarokIndispozicnihoVolna), ne ručně na zaměstnance."
         ),
     )
+    kategorie_pro_prehled = models.CharField(
+        _("kategorie pro přehled přítomnosti"),
+        max_length=20,
+        choices=KategoriePrehled.choices,
+        default=KategoriePrehled.JINA,
+        help_text=_(
+            "Určuje, pod jakou kategorií se schválené žádosti tohoto typu "
+            "zobrazí v denním přehledu přítomnosti a vyhledání zaměstnance."
+        ),
+    )
     barva = models.CharField(
         _("barva (hex)"), max_length=7, default="#4A90E2",
         help_text=_("Barva pro zobrazení v kalendáři."),
@@ -35,6 +54,23 @@ class TypDovolene(models.Model):
 
     def __str__(self):
         return f"{self.zkratka} – {self.nazev}"
+
+    def clean(self):
+        je_iv_kategorie = self.kategorie_pro_prehled == self.KategoriePrehled.INDISPOZICNI_VOLNO
+        if self.je_indispozicni_volno and not je_iv_kategorie:
+            raise ValidationError(
+                _(
+                    "Typ označený jako indispoziční volno musí mít kategorii pro "
+                    "přehled nastavenou na „Indispoziční volno“."
+                )
+            )
+        if je_iv_kategorie and not self.je_indispozicni_volno:
+            raise ValidationError(
+                _(
+                    "Kategorii pro přehled „Indispoziční volno“ smí mít jen typ "
+                    "označený jako indispoziční volno."
+                )
+            )
 
     def vychozi_narok(self, datum):
         """

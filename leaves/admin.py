@@ -9,8 +9,12 @@ from .models import (
 
 @admin.register(TypDovolene)
 class TypDovoleneAdmin(admin.ModelAdmin):
-    list_display = ["zkratka", "nazev", "odecita_ze_zustatku", "je_indispozicni_volno", "aktivni"]
+    list_display = [
+        "zkratka", "nazev", "odecita_ze_zustatku", "je_indispozicni_volno",
+        "kategorie_pro_prehled", "aktivni",
+    ]
     list_editable = ["aktivni"]
+    list_filter = ["kategorie_pro_prehled"]
 
 
 @admin.register(NarokIndispozicnihoVolna)
