@@ -1,0 +1,361 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: evidence-prac-doby\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-07-04 00:00+0000\n"
+"PO-Revision-Date: 2026-07-04 00:00+0000\n"
+"Last-Translator: \n"
+"Language-Team: Czech\n"
+"Language: cs\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=3; plural=(n==1) ? 0 : (n>=2 && n<=4) ? 1 : 2;\n"
+
+# --- django_celery_beat: app label ---
+msgid "Periodic Tasks"
+msgstr "Plánované úlohy"
+
+# --- django_celery_beat: models.py — model names ---
+msgid "solar event"
+msgstr "sluneční událost"
+
+msgid "solar events"
+msgstr "sluneční události"
+
+msgid "interval"
+msgstr "interval"
+
+msgid "intervals"
+msgstr "intervaly"
+
+msgid "clocked"
+msgstr "jednorázový plán"
+
+msgid "crontab"
+msgstr "crontab"
+
+msgid "crontabs"
+msgstr "crontaby"
+
+msgid "periodic task"
+msgstr "plánovaná úloha"
+
+msgid "periodic tasks"
+msgstr "plánované úlohy"
+
+# --- models.py — SolarSchedule fields ---
+msgid "Solar Event"
+msgstr "Sluneční událost"
+
+msgid "The type of solar event when the job should run"
+msgstr "Typ sluneční události, při které se má úloha spustit"
+
+msgid "Latitude"
+msgstr "Zeměpisná šířka"
+
+msgid "Run the task when the event happens at this latitude"
+msgstr "Spustit úlohu, když k události dojde na této zeměpisné šířce"
+
+msgid "Longitude"
+msgstr "Zeměpisná délka"
+
+msgid "Run the task when the event happens at this longitude"
+msgstr "Spustit úlohu, když k události dojde na této zeměpisné délce"
+
+# --- SOLAR_SCHEDULES choices ---
+msgid "Astronomical dawn"
+msgstr "Astronomický úsvit"
+
+msgid "Civil dawn"
+msgstr "Občanský úsvit"
+
+msgid "Nautical dawn"
+msgstr "Námořní úsvit"
+
+msgid "Astronomical dusk"
+msgstr "Astronomický soumrak"
+
+msgid "Civil dusk"
+msgstr "Občanský soumrak"
+
+msgid "Nautical dusk"
+msgstr "Námořní soumrak"
+
+msgid "Solar noon"
+msgstr "Sluneční poledne"
+
+msgid "Sunrise"
+msgstr "Východ slunce"
+
+msgid "Sunset"
+msgstr "Západ slunce"
+
+# --- PERIOD_CHOICES / SINGULAR_PERIODS ---
+msgid "Days"
+msgstr "Dny"
+
+msgid "Hours"
+msgstr "Hodiny"
+
+msgid "Minutes"
+msgstr "Minuty"
+
+msgid "Seconds"
+msgstr "Sekundy"
+
+msgid "Microseconds"
+msgstr "Mikrosekundy"
+
+msgid "Day"
+msgstr "Den"
+
+msgid "Hour"
+msgstr "Hodina"
+
+msgid "Minute"
+msgstr "Minuta"
+
+msgid "Second"
+msgstr "Sekunda"
+
+msgid "Microsecond"
+msgstr "Mikrosekunda"
+
+# --- IntervalSchedule fields ---
+msgid "Number of Periods"
+msgstr "Počet period"
+
+msgid "Number of interval periods to wait before running the task again"
+msgstr "Počet period, které se mají vyčkat, než se úloha spustí znovu"
+
+msgid "Interval Period"
+msgstr "Typ periody"
+
+msgid "The type of period between task runs (Example: days)"
+msgstr "Typ periody mezi spuštěními úlohy (např. dny)"
+
+msgid "every {}"
+msgstr "každou {}"
+
+msgid "every {} {}"
+msgstr "každých {} {}"
+
+# --- ClockedSchedule fields ---
+msgid "Clock Time"
+msgstr "Čas spuštění"
+
+msgid "Run the task at clocked time"
+msgstr "Spustit úlohu v přesně stanovený čas"
+
+# --- CrontabSchedule fields ---
+msgid "Minute(s)"
+msgstr "Minuta/y"
+
+msgid "Cron Minutes to Run. Use \"*\" for \"all\". (Example: \"0,30\")"
+msgstr "Minuty spuštění (cron). Použijte „*“ pro „všechny“. (Např. „0,30“)"
+
+msgid "Hour(s)"
+msgstr "Hodina/y"
+
+msgid "Cron Hours to Run. Use \"*\" for \"all\". (Example: \"8,20\")"
+msgstr "Hodiny spuštění (cron). Použijte „*“ pro „všechny“. (Např. „8,20“)"
+
+msgid "Day(s) Of The Month"
+msgstr "Den/dny v měsíci"
+
+msgid "Cron Days Of The Month to Run. Use \"*\" for \"all\". (Example: \"1,15\")"
+msgstr "Dny v měsíci pro spuštění (cron). Použijte „*“ pro „všechny“. (Např. „1,15“)"
+
+msgid "Month(s) Of The Year"
+msgstr "Měsíc/e v roce"
+
+msgid "Cron Months (1-12) Of The Year to Run. Use \"*\" for \"all\". (Example: \"1,12\")"
+msgstr "Měsíce v roce (1–12) pro spuštění (cron). Použijte „*“ pro „všechny“. (Např. „1,12“)"
+
+msgid "Day(s) Of The Week"
+msgstr "Den/dny v týdnu"
+
+msgid "Cron Days Of The Week to Run. Use \"*\" for \"all\", Sunday is 0 or 7, Monday is 1. (Example: \"0,5\")"
+msgstr "Dny v týdnu pro spuštění (cron). Použijte „*“ pro „všechny“, neděle je 0 nebo 7, pondělí je 1. (Např. „0,5“)"
+
+msgid "Cron Timezone"
+msgstr "Časové pásmo (cron)"
+
+msgid "Timezone to Run the Cron Schedule on. Default is UTC."
+msgstr "Časové pásmo, ve kterém se má plán crontab vyhodnocovat. Výchozí je UTC."
+
+# --- PeriodicTask fields ---
+msgid "Name"
+msgstr "Název"
+
+msgid "Short Description For This Task"
+msgstr "Krátký popis této úlohy"
+
+msgid "The Name of the Celery Task that Should be Run.  (Example: \"proj.tasks.import_contacts\")"
+msgstr "Název Celery úlohy, která se má spustit. (Např. „proj.tasks.import_contacts“)"
+
+msgid "Interval Schedule"
+msgstr "Intervalový plán"
+
+msgid "Interval Schedule to run the task on.  Set only one schedule type, leave the others null."
+msgstr "Intervalový plán, podle kterého se úloha spustí. Nastavte jen jeden typ plánu, ostatní ponechte prázdné."
+
+msgid "Crontab Schedule"
+msgstr "Plán crontab"
+
+msgid "Crontab Schedule to run the task on.  Set only one schedule type, leave the others null."
+msgstr "Plán crontab, podle kterého se úloha spustí. Nastavte jen jeden typ plánu, ostatní ponechte prázdné."
+
+msgid "Solar Schedule"
+msgstr "Sluneční plán"
+
+msgid "Solar Schedule to run the task on.  Set only one schedule type, leave the others null."
+msgstr "Sluneční plán, podle kterého se úloha spustí. Nastavte jen jeden typ plánu, ostatní ponechte prázdné."
+
+msgid "Clocked Schedule"
+msgstr "Jednorázový plán"
+
+msgid "Clocked Schedule to run the task on.  Set only one schedule type, leave the others null."
+msgstr "Jednorázový plán, podle kterého se úloha spustí. Nastavte jen jeden typ plánu, ostatní ponechte prázdné."
+
+msgid "Positional Arguments"
+msgstr "Poziční argumenty"
+
+msgid "JSON encoded positional arguments (Example: [\"arg1\", \"arg2\"])"
+msgstr "Poziční argumenty ve formátu JSON (např. [\"arg1\", \"arg2\"])"
+
+msgid "Keyword Arguments"
+msgstr "Pojmenované argumenty"
+
+msgid "JSON encoded keyword arguments (Example: {\"argument\": \"value\"})"
+msgstr "Pojmenované argumenty ve formátu JSON (např. {\"argument\": \"value\"})"
+
+msgid "Queue Override"
+msgstr "Vlastní fronta"
+
+msgid "Queue defined in CELERY_TASK_QUEUES. Leave None for default queuing."
+msgstr "Fronta definovaná v CELERY_TASK_QUEUES. Ponechte prázdné pro výchozí frontu."
+
+msgid "Exchange"
+msgstr "Exchange"
+
+msgid "Override Exchange for low-level AMQP routing"
+msgstr "Vlastní exchange pro nízkoúrovňové směrování AMQP"
+
+msgid "Routing Key"
+msgstr "Routing key"
+
+msgid "Override Routing Key for low-level AMQP routing"
+msgstr "Vlastní routing key pro nízkoúrovňové směrování AMQP"
+
+msgid "AMQP Message Headers"
+msgstr "Hlavičky AMQP zprávy"
+
+msgid "JSON encoded message headers for the AMQP message."
+msgstr "Hlavičky AMQP zprávy ve formátu JSON."
+
+msgid "Priority"
+msgstr "Priorita"
+
+msgid "Priority Number between 0 and 255. Supported by: RabbitMQ, Redis (priority reversed, 0 is highest)."
+msgstr "Číslo priority mezi 0 a 255. Podporováno: RabbitMQ, Redis (priorita obráceně, 0 je nejvyšší)."
+
+msgid "Expires Datetime"
+msgstr "Platnost do (datum a čas)"
+
+msgid "Datetime after which the schedule will no longer trigger the task to run"
+msgstr "Datum a čas, po kterém plán úlohu už znovu nespustí"
+
+msgid "Expires timedelta with seconds"
+msgstr "Platnost do (počet sekund)"
+
+msgid "Timedelta with seconds which the schedule will no longer trigger the task to run"
+msgstr "Počet sekund, po jejichž uplynutí plán úlohu už znovu nespustí"
+
+msgid "One-off Task"
+msgstr "Jednorázová úloha"
+
+msgid "If True, the schedule will only run the task a single time"
+msgstr "Pokud je zapnuto, plán spustí úlohu jen jednou"
+
+msgid "Start Datetime"
+msgstr "Začátek platnosti (datum a čas)"
+
+msgid "Datetime when the schedule should begin triggering the task to run"
+msgstr "Datum a čas, od kdy má plán začít úlohu spouštět"
+
+msgid "Enabled"
+msgstr "Aktivní"
+
+msgid "Set to False to disable the schedule"
+msgstr "Vypněte pro deaktivaci plánu"
+
+msgid "Last Run Datetime"
+msgstr "Poslední spuštění (datum a čas)"
+
+msgid "Datetime that the schedule last triggered the task to run. Reset to None if enabled is set to False."
+msgstr "Datum a čas posledního spuštění úlohy podle tohoto plánu. Vynulováno při vypnutí plánu."
+
+msgid "Total Run Count"
+msgstr "Celkový počet spuštění"
+
+msgid "Running count of how many times the schedule has triggered the task"
+msgstr "Počet, kolikrát plán úlohu doposud spustil"
+
+msgid "Last Modified"
+msgstr "Naposledy upraveno"
+
+msgid "Datetime that this PeriodicTask was last modified"
+msgstr "Datum a čas poslední úpravy této plánované úlohy"
+
+msgid "Description"
+msgstr "Popis"
+
+msgid "Detailed description about the details of this Periodic Task"
+msgstr "Podrobný popis této plánované úlohy"
+
+msgid "Only one can be set, in expires and expire_seconds"
+msgstr "Lze nastavit pouze jedno z polí „platnost do“ a „platnost do (počet sekund)“"
+
+# --- admin.py — form labels ---
+msgid "Task (registered)"
+msgstr "Úloha (registrovaná)"
+
+msgid "Task (custom)"
+msgstr "Úloha (vlastní)"
+
+msgid "Need name of task"
+msgstr "Je třeba zadat název úlohy"
+
+msgid "Unable to parse JSON: %s"
+msgstr "Nepodařilo se zpracovat JSON: %s"
+
+# --- admin.py — fieldset legends ---
+msgid "Schedule"
+msgstr "Plán"
+
+msgid "Arguments"
+msgstr "Argumenty"
+
+msgid "Execution Options"
+msgstr "Možnosti spuštění"
+
+# --- admin.py — bulk actions ---
+msgid "Enable selected tasks"
+msgstr "Aktivovat vybrané úlohy"
+
+msgid "Disable selected tasks"
+msgstr "Deaktivovat vybrané úlohy"
+
+msgid "Toggle activity of selected tasks"
+msgstr "Přepnout aktivitu vybraných úloh"
+
+msgid "Run selected tasks"
+msgstr "Spustit vybrané úlohy"
+
+msgid "{0} task{1} {2} successfully {3}"
+msgstr "Úspěšně upraveno úloh: {0}"
+
+msgid "{0} task{1} {2} successfully run"
+msgstr "Úspěšně spuštěno úloh: {0}"
