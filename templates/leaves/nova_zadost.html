@@ -1,17 +1,17 @@
 {% extends "base.html" %}
 {% load crispy_forms_tags %}
-{% block title %}Nová žádost o dovolenou{% endblock %}
+{% block title %}Nová žádost / záznam{% endblock %}
 
 {% block content %}
 <div class="row justify-content-center">
   <div class="col-md-6">
     <div class="card shadow-sm">
-      <div class="card-header"><strong>Nová žádost o dovolenou</strong></div>
+      <div class="card-header"><strong>Nová žádost / záznam</strong></div>
       <div class="card-body">
         <form method="post">
           {% csrf_token %}
           {{ form|crispy }}
-          <button type="submit" class="btn btn-primary">Odeslat ke schválení</button>
+          <button type="submit" class="btn btn-primary">Odeslat</button>
           <a href="{% url 'leaves:moje_zadosti' %}" class="btn btn-outline-secondary">Zpět</a>
         </form>
       </div>

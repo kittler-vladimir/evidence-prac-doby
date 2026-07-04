@@ -6,8 +6,12 @@ from django.core.exceptions import ValidationError
 from django.utils import timezone
 
 
-class TypDovolene(models.Model):
-    """Číselník typů absence (dovolená, nemoc, sick day, OČR...)."""
+class TypStavu(models.Model):
+    """
+    Číselník typů stavu zaměstnance v daný okamžik (dovolená, nemoc,
+    indispoziční volno, home office...). Dovolená je jen jednou instancí
+    tohoto obecného konceptu, ne výchozím případem.
+    """
 
     class KategoriePrehled(models.TextChoices):
         DOVOLENA = "DOVOLENA", _("Dovolená")
@@ -32,25 +36,46 @@ class TypDovolene(models.Model):
             "nastavení (NarokIndispozicnihoVolna), ne ručně na zaměstnance."
         ),
     )
+    vyzaduje_schvaleni = models.BooleanField(
+        _("vyžaduje schválení"),
+        default=True,
+        help_text=_(
+            "Zapnuto: zaměstnanec podává žádost, kterou schvaluje vedoucí "
+            "(dovolená, indispoziční volno). Vypnuto: zaměstnanec si stav "
+            "zapisuje sám na daný den/rozsah, bez schvalování (např. "
+            "nemoc, OČR, služební volno, home office)."
+        ),
+    )
+    je_pritomnost = models.BooleanField(
+        _("je přítomnost"),
+        default=False,
+        help_text=_(
+            "Zapnuto u typů, kdy zaměstnanec pracuje, jen ne na pracovišti "
+            "(např. home office) — v denním přehledu má přednost i před "
+            "běžným „Přítomen“ na základě docházky. Vypnuto u typů "
+            "nepřítomnosti na pracovišti."
+        ),
+    )
     kategorie_pro_prehled = models.CharField(
         _("kategorie pro přehled přítomnosti"),
         max_length=20,
         choices=KategoriePrehled.choices,
         default=KategoriePrehled.JINA,
         help_text=_(
-            "Určuje, pod jakou kategorií se schválené žádosti tohoto typu "
-            "zobrazí v denním přehledu přítomnosti a vyhledání zaměstnance."
+            "Volitelné hrubé třídění pro administraci. Zobrazení a priorita "
+            "v denním přehledu přítomnosti na tomto poli nezávisí — vychází "
+            "přímo z názvu/barvy tohoto typu a z pole „je přítomnost“."
         ),
     )
     barva = models.CharField(
         _("barva (hex)"), max_length=7, default="#4A90E2",
-        help_text=_("Barva pro zobrazení v kalendáři."),
+        help_text=_("Barva pro zobrazení v kalendáři a v denním přehledu přítomnosti."),
     )
     aktivni = models.BooleanField(_("aktivní"), default=True)
 
     class Meta:
-        verbose_name = _("typ dovolené")
-        verbose_name_plural = _("typy dovolené")
+        verbose_name = _("typ stavu")
+        verbose_name_plural = _("typy stavu")
 
     def __str__(self):
         return f"{self.zkratka} – {self.nazev}"
@@ -69,6 +94,14 @@ class TypDovolene(models.Model):
                 _(
                     "Kategorii pro přehled „Indispoziční volno“ smí mít jen typ "
                     "označený jako indispoziční volno."
+                )
+            )
+        if self.odecita_ze_zustatku and not self.vyzaduje_schvaleni:
+            raise ValidationError(
+                _(
+                    "Typ, který odečítá ze zůstatku, musí vyžadovat schválení — "
+                    "zůstatek se aktualizuje jen při schválení vedoucím "
+                    "(ZadostOStav.schval()), samo-záznam ho nikdy neupraví."
                 )
             )
 
@@ -108,18 +141,18 @@ class NarokIndispozicnihoVolna(models.Model):
         return radek.hodin if radek else Decimal("0")
 
 
-class ZustatekDovolene(models.Model):
-    """Nárok a čerpání absence v hodinách pro daného zaměstnance, rok a typ."""
+class ZustatekStavu(models.Model):
+    """Nárok a čerpání v hodinách pro daného zaměstnance, rok a typ stavu."""
 
     employee = models.ForeignKey(
         "accounts.Employee",
         on_delete=models.CASCADE,
-        related_name="zustatky_dovolene",
+        related_name="zustatky_stavu",
         verbose_name=_("zaměstnanec"),
     )
     rok = models.PositiveSmallIntegerField(_("rok"))
     typ = models.ForeignKey(
-        TypDovolene,
+        TypStavu,
         on_delete=models.PROTECT,
         related_name="zustatky",
         verbose_name=_("typ"),
@@ -132,8 +165,8 @@ class ZustatekDovolene(models.Model):
     )
 
     class Meta:
-        verbose_name = _("zůstatek dovolené")
-        verbose_name_plural = _("zůstatky dovolené")
+        verbose_name = _("zůstatek stavu")
+        verbose_name_plural = _("zůstatky stavu")
         unique_together = [("employee", "rok", "typ")]
         ordering = ["-rok"]
 
@@ -148,8 +181,13 @@ class ZustatekDovolene(models.Model):
         return self.narok_hodin - self.cerpano_hodin
 
 
-class ZadostODovolenou(models.Model):
-    """Žádost zaměstnance o dovolenou / absenci."""
+class ZadostOStav(models.Model):
+    """
+    Žádost o stav (typy s vyzaduje_schvaleni=True, např. dovolená,
+    indispoziční volno) nebo samo-záznam stavu (vyzaduje_schvaleni=False,
+    např. nemoc, OČR, služební volno, home office) — stejná struktura,
+    liší se jen tím, jestli prochází schválením vedoucím.
+    """
 
     class Stav(models.TextChoices):
         CEKA = "ceka", _("Čeká na schválení")
@@ -160,11 +198,11 @@ class ZadostODovolenou(models.Model):
     employee = models.ForeignKey(
         "accounts.Employee",
         on_delete=models.CASCADE,
-        related_name="zadosti_o_dovolenou",
+        related_name="zadosti_o_stav",
         verbose_name=_("zaměstnanec"),
     )
     typ = models.ForeignKey(
-        TypDovolene,
+        TypStavu,
         on_delete=models.PROTECT,
         verbose_name=_("typ"),
     )
@@ -205,8 +243,8 @@ class ZadostODovolenou(models.Model):
     upraveno = models.DateTimeField(_("upraveno"), auto_now=True)
 
     class Meta:
-        verbose_name = _("žádost o dovolenou")
-        verbose_name_plural = _("žádosti o dovolenou")
+        verbose_name = _("žádost o stav")
+        verbose_name_plural = _("žádosti o stav")
         ordering = ["-vytvoreno"]
 
     def __str__(self):
@@ -248,11 +286,11 @@ class ZadostODovolenou(models.Model):
         self.pocet_hodin = celkem
 
     def schval(self, schvalovatele):
-        """Schválí žádost a aktualizuje zůstatek dovolené."""
+        """Schválí žádost a aktualizuje zůstatek stavu."""
         zustatek = None
         if self.typ.odecita_ze_zustatku:
             rok = self.datum_od.year
-            zustatek = ZustatekDovolene.objects.filter(
+            zustatek = ZustatekStavu.objects.filter(
                 employee=self.employee, rok=rok, typ=self.typ
             ).first()
             if not zustatek:
@@ -261,7 +299,7 @@ class ZadostODovolenou(models.Model):
                     raise ValidationError(
                         _("Pro indispoziční volno není nastaven žádný aktivní nárok.")
                     )
-                zustatek = ZustatekDovolene.objects.create(
+                zustatek = ZustatekStavu.objects.create(
                     employee=self.employee, rok=rok, typ=self.typ,
                     narok_hodin=narok_default,
                 )
@@ -284,10 +322,19 @@ class ZadostODovolenou(models.Model):
         self.save()
 
     def save(self, *args, **kwargs):
+        je_novy = self.pk is None
+
         # Přepočítat hodiny před uložením pokud je potřeba
         if not self.pocet_hodin and self.datum_od and self.datum_do:
             self.vypocitej_hodiny()
-        # Nastavit schvalovatele pokud není
-        if not self.schvalovatele_id and self.employee_id:
+
+        if je_novy and self.typ_id and not self.typ.vyzaduje_schvaleni:
+            # Samo-záznam (nemoc, OČR, služební volno, home office): platí
+            # okamžitě, bez schvalovatele a bez e-mailové notifikace.
+            self.stav = self.Stav.SCHVALENO
+            self.schvaleno_kdy = timezone.now()
+        elif not self.schvalovatele_id and self.employee_id:
+            # Žádost vyžadující schválení — přiřadit schvalovatele, pokud není.
             self.schvalovatele = self.employee.get_schvalovatel()
+
         super().save(*args, **kwargs)

@@ -7,7 +7,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from accounts.models import Employee, Oddeleni, Odbor, Sekce, TypUvazku
-from leaves.models import TypDovolene, ZadostODovolenou
+from leaves.models import TypStavu, ZadostOStav
 from timetracking.models import WorkSession
 from reports.services import NEPRITOMEN, PRITOMEN, stav_zamestnance
 
@@ -30,9 +30,15 @@ class PrehledPritomnostiTestCase(TestCase):
         self.oddeleni_a.vedouci = self.zam_a
         self.oddeleni_a.save()
 
-        self.typ_dovolena = TypDovolene.objects.create(
+        self.typ_dovolena = TypStavu.objects.create(
             nazev="Dovolena", zkratka="DOV", odecita_ze_zustatku=True,
-            kategorie_pro_prehled=TypDovolene.KategoriePrehled.DOVOLENA,
+            kategorie_pro_prehled=TypStavu.KategoriePrehled.DOVOLENA,
+            barva="#FFC107",
+        )
+        self.typ_home_office = TypStavu.objects.create(
+            nazev="Home office", zkratka="HO",
+            odecita_ze_zustatku=False, je_pritomnost=True,
+            vyzaduje_schvaleni=False, barva="#6610F2",
         )
 
     def _vytvor_zamestnance(self, email, first, last, oddeleni, cislo):
@@ -51,9 +57,9 @@ class PrehledPritomnostiTestCase(TestCase):
 
     def test_pritomnost_ma_prednost_pred_schvalenou_absenci(self):
         dnes = timezone.localdate()
-        ZadostODovolenou.objects.create(
+        ZadostOStav.objects.create(
             employee=self.zam_b, typ=self.typ_dovolena,
-            datum_od=dnes, datum_do=dnes, stav=ZadostODovolenou.Stav.SCHVALENO,
+            datum_od=dnes, datum_do=dnes, stav=ZadostOStav.Stav.SCHVALENO,
         )
         WorkSession.objects.create(
             employee=self.zam_b,
@@ -66,14 +72,56 @@ class PrehledPritomnostiTestCase(TestCase):
         stav = stav_zamestnance(self.zam_b, timezone.localdate())
         self.assertEqual(stav.kod, NEPRITOMEN)
 
-    def test_schvalena_zadost_bez_pritomnosti_ukaze_kategorii_absence(self):
+    def test_schvalena_zadost_bez_pritomnosti_ukaze_typ_stavu(self):
         dnes = timezone.localdate()
-        ZadostODovolenou.objects.create(
+        ZadostOStav.objects.create(
             employee=self.zam_b, typ=self.typ_dovolena,
-            datum_od=dnes, datum_do=dnes, stav=ZadostODovolenou.Stav.SCHVALENO,
+            datum_od=dnes, datum_do=dnes, stav=ZadostOStav.Stav.SCHVALENO,
         )
         stav = stav_zamestnance(self.zam_b, dnes)
-        self.assertEqual(stav.kod, TypDovolene.KategoriePrehled.DOVOLENA)
+        self.assertEqual(stav.kod, self.typ_dovolena.zkratka)
+        self.assertEqual(stav.popisek, self.typ_dovolena.nazev)
+        self.assertEqual(stav.barva, self.typ_dovolena.barva)
+
+    def test_home_office_ma_prednost_pred_pritomen(self):
+        """Home office (je_pritomnost=True) se zobrazí i když existuje WorkSession."""
+        dnes = timezone.localdate()
+        ZadostOStav.objects.create(
+            employee=self.zam_b, typ=self.typ_home_office,
+            datum_od=dnes, datum_do=dnes, stav=ZadostOStav.Stav.SCHVALENO,
+        )
+        WorkSession.objects.create(
+            employee=self.zam_b,
+            zacatek=timezone.now().replace(hour=8, minute=0, second=0, microsecond=0),
+        )
+        stav = stav_zamestnance(self.zam_b, dnes)
+        self.assertEqual(stav.kod, self.typ_home_office.zkratka)
+
+    def test_home_office_se_zobrazi_i_bez_worksession(self):
+        dnes = timezone.localdate()
+        ZadostOStav.objects.create(
+            employee=self.zam_b, typ=self.typ_home_office,
+            datum_od=dnes, datum_do=dnes, stav=ZadostOStav.Stav.SCHVALENO,
+        )
+        stav = stav_zamestnance(self.zam_b, dnes)
+        self.assertEqual(stav.kod, self.typ_home_office.zkratka)
+
+    def test_novy_typ_zalozeny_jen_v_testu_funguje_bez_zasahu_do_kodu(self):
+        """Nový TypStavu (bez odkazu na jakýkoli enum) se v přehledu zobrazí správně."""
+        dnes = timezone.localdate()
+        typ_sjezd = TypStavu.objects.create(
+            nazev="Sjezd", zkratka="SJ",
+            odecita_ze_zustatku=False, je_pritomnost=False,
+            vyzaduje_schvaleni=False, barva="#123456",
+        )
+        ZadostOStav.objects.create(
+            employee=self.zam_b, typ=typ_sjezd,
+            datum_od=dnes, datum_do=dnes, stav=ZadostOStav.Stav.SCHVALENO,
+        )
+        stav = stav_zamestnance(self.zam_b, dnes)
+        self.assertEqual(stav.kod, "SJ")
+        self.assertEqual(stav.popisek, "Sjezd")
+        self.assertEqual(stav.barva, "#123456")
 
     def test_radovy_zamestnanec_vidi_cely_svuj_odbor(self):
         self._prihlas(self.zam_b, "b@example.com")

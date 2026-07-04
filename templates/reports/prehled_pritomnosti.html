@@ -36,7 +36,7 @@
         <tr>
           <td>{{ r.employee.jmeno }}</td>
           <td>{{ r.employee.oddeleni }}</td>
-          <td><span class="badge {{ r.stav.badge_trida }}">{{ r.stav.popisek }}</span></td>
+          <td><span class="badge {{ r.stav.badge_trida }}" {% if r.stav.barva %}style="background-color: {{ r.stav.barva }};"{% endif %}>{{ r.stav.popisek }}</span></td>
         </tr>
         {% empty %}
         <tr><td colspan="3" class="text-center text-muted py-3">Žádní podřízení zaměstnanci.</td></tr>

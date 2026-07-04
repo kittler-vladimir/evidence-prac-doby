@@ -7,12 +7,12 @@ from django.test import TestCase
 from django.urls import reverse
 
 from accounts.models import Employee, Oddeleni, Odbor, Sekce, TypUvazku
-from leaves.forms import ZadostODovolenoForm
+from leaves.forms import ZadostOStavForm
 from leaves.models import (
     NarokIndispozicnihoVolna,
-    TypDovolene,
-    ZadostODovolenou,
-    ZustatekDovolene,
+    TypStavu,
+    ZadostOStav,
+    ZustatekStavu,
 )
 
 User = get_user_model()
@@ -48,15 +48,15 @@ class IndispozicniVolnoTestCase(TestCase):
             typ_uvazku=self.poloviny_uvazek, datum_nastupu=date(2020, 1, 1),
         )
 
-        self.typ_iv = TypDovolene.objects.create(
+        self.typ_iv = TypStavu.objects.create(
             nazev="Indispoziční volno", zkratka="IV",
             odecita_ze_zustatku=True, je_indispozicni_volno=True,
-            kategorie_pro_prehled=TypDovolene.KategoriePrehled.INDISPOZICNI_VOLNO,
+            kategorie_pro_prehled=TypStavu.KategoriePrehled.INDISPOZICNI_VOLNO,
         )
         NarokIndispozicnihoVolna.objects.create(hodin=Decimal("40.00"), platne_od=date(2026, 1, 1))
 
     def _zadost(self, employee, datum_od, datum_do):
-        zadost = ZadostODovolenou(
+        zadost = ZadostOStav(
             employee=employee, typ=self.typ_iv, datum_od=datum_od, datum_do=datum_do,
         )
         zadost.save()
@@ -67,7 +67,7 @@ class IndispozicniVolnoTestCase(TestCase):
         zadost = self._zadost(self.employee, date(2026, 7, 6), date(2026, 7, 6))
         zadost.schval(self.employee)
 
-        zustatek = ZustatekDovolene.objects.get(
+        zustatek = ZustatekStavu.objects.get(
             employee=self.employee, rok=2026, typ=self.typ_iv
         )
         self.assertEqual(zustatek.narok_hodin, Decimal("40.00"))
@@ -76,7 +76,7 @@ class IndispozicniVolnoTestCase(TestCase):
 
     def test_zadost_presahujici_zustatek_je_odmitnuta_validaci(self):
         # 40h nároku, ale žádost o 6 pracovních dní (48h) přesahuje limit
-        form = ZadostODovolenoForm(
+        form = ZadostOStavForm(
             data={
                 "typ": self.typ_iv.pk,
                 "datum_od": "2026-07-06",
@@ -95,7 +95,7 @@ class IndispozicniVolnoTestCase(TestCase):
         # Admin uprostřed roku zvýší globální nárok na 48h
         NarokIndispozicnihoVolna.objects.create(hodin=Decimal("48.00"), platne_od=date(2026, 8, 1))
 
-        zustatek = ZustatekDovolene.objects.get(
+        zustatek = ZustatekStavu.objects.get(
             employee=self.employee, rok=2026, typ=self.typ_iv
         )
         self.assertEqual(zustatek.narok_hodin, Decimal("40.00"))
@@ -105,7 +105,7 @@ class IndispozicniVolnoTestCase(TestCase):
         zadost = self._zadost(self.part_time_employee, date(2026, 7, 6), date(2026, 7, 6))
         zadost.schval(self.part_time_employee)
 
-        zustatek = ZustatekDovolene.objects.get(
+        zustatek = ZustatekStavu.objects.get(
             employee=self.part_time_employee, rok=2026, typ=self.typ_iv
         )
         self.assertEqual(zustatek.narok_hodin, Decimal("40.00"))
@@ -121,9 +121,9 @@ class IndispozicniVolnoTestCase(TestCase):
             zadost.schval(self.employee)
 
         zadost.refresh_from_db()
-        self.assertEqual(zadost.stav, ZadostODovolenou.Stav.CEKA)
+        self.assertEqual(zadost.stav, ZadostOStav.Stav.CEKA)
         self.assertFalse(
-            ZustatekDovolene.objects.filter(
+            ZustatekStavu.objects.filter(
                 employee=self.employee, rok=2026, typ=self.typ_iv
             ).exists()
         )
@@ -146,18 +146,95 @@ class IndispozicniVolnoTestCase(TestCase):
 
     def test_kategorie_pro_prehled_musi_odpovidat_je_indispozicni_volno(self):
         """Typ s je_indispozicni_volno=True musí mít kategorii INDISPOZICNI_VOLNO a naopak."""
-        nesouhlasny = TypDovolene(
+        nesouhlasny = TypStavu(
             nazev="Nesouhlasny typ", zkratka="NS",
             je_indispozicni_volno=True,
-            kategorie_pro_prehled=TypDovolene.KategoriePrehled.JINA,
+            kategorie_pro_prehled=TypStavu.KategoriePrehled.JINA,
         )
         with self.assertRaises(ValidationError):
             nesouhlasny.full_clean()
 
-        opacne_nesouhlasny = TypDovolene(
+        opacne_nesouhlasny = TypStavu(
             nazev="Opacne nesouhlasny", zkratka="ON",
             je_indispozicni_volno=False,
-            kategorie_pro_prehled=TypDovolene.KategoriePrehled.INDISPOZICNI_VOLNO,
+            kategorie_pro_prehled=TypStavu.KategoriePrehled.INDISPOZICNI_VOLNO,
         )
         with self.assertRaises(ValidationError):
             opacne_nesouhlasny.full_clean()
+
+
+class SamoZaznamTestCase(TestCase):
+    """Typy s vyzaduje_schvaleni=False (nemoc, OČR, služební volno, home office)
+    se zaznamenávají samy zaměstnancem, bez schvalování vedoucím."""
+
+    def setUp(self):
+        sekce = Sekce.objects.create(nazev="Sekce", kod="S1")
+        odbor = Odbor.objects.create(sekce=sekce, nazev="Odbor", kod="O1")
+        self.oddeleni = Oddeleni.objects.create(odbor=odbor, nazev="Oddělení", kod="OD1")
+        self.uvazek = TypUvazku.objects.create(
+            nazev="Plný úvazek", hodiny_denne=Decimal("8.00"), hodiny_tyydne=Decimal("40.00")
+        )
+        user = User.objects.create_user(
+            username="petr@example.com", email="petr@example.com",
+            first_name="Petr", last_name="Pilny",
+        )
+        self.employee = Employee.objects.create(
+            user=user, osobni_cislo="1", oddeleni=self.oddeleni,
+            typ_uvazku=self.uvazek, datum_nastupu=date(2020, 1, 1),
+        )
+
+        self.typ_home_office = TypStavu.objects.create(
+            nazev="Home office", zkratka="HO",
+            odecita_ze_zustatku=False, je_pritomnost=True,
+            vyzaduje_schvaleni=False, barva="#6610F2",
+        )
+        self.typ_dovolena = TypStavu.objects.create(
+            nazev="Dovolená", zkratka="DOV",
+            odecita_ze_zustatku=True, vyzaduje_schvaleni=True,
+        )
+
+    def test_samo_zaznam_je_ihned_schvaleny_bez_schvalovatele(self):
+        zadost = ZadostOStav(
+            employee=self.employee, typ=self.typ_home_office,
+            datum_od=date(2026, 7, 6), datum_do=date(2026, 7, 6),
+        )
+        zadost.save()
+
+        self.assertEqual(zadost.stav, ZadostOStav.Stav.SCHVALENO)
+        self.assertIsNone(zadost.schvalovatele)
+        self.assertIsNotNone(zadost.schvaleno_kdy)
+        self.assertGreater(zadost.pocet_hodin, 0)
+
+    def test_zadost_vyzadujici_schvaleni_zustava_cekajici_a_ma_schvalovatele(self):
+        zadost = ZadostOStav(
+            employee=self.employee, typ=self.typ_dovolena,
+            datum_od=date(2026, 7, 6), datum_do=date(2026, 7, 6),
+        )
+        zadost.save()
+
+        self.assertEqual(zadost.stav, ZadostOStav.Stav.CEKA)
+
+    def test_ke_schvaleni_neobsahuje_samo_zaznamy(self):
+        """Fronta ke schválení vidí jen typy vyzadujici_schvaleni=True."""
+        self.oddeleni.vedouci = self.employee
+        self.oddeleni.save()
+
+        ZadostOStav.objects.create(
+            employee=self.employee, typ=self.typ_home_office,
+            datum_od=date(2026, 7, 6), datum_do=date(2026, 7, 6),
+            schvalovatele=self.employee,
+        )
+        zadost_dovolena = ZadostOStav.objects.create(
+            employee=self.employee, typ=self.typ_dovolena,
+            datum_od=date(2026, 7, 7), datum_do=date(2026, 7, 7),
+            schvalovatele=self.employee,
+        )
+
+        self.employee.user.set_password("test12345")
+        self.employee.user.save()
+        self.assertTrue(self.client.login(username="petr@example.com", password="test12345"))
+
+        response = self.client.get(reverse("leaves:ke_schvaleni"))
+        self.assertEqual(response.status_code, 200)
+        zadosti = list(response.context["zadosti"])
+        self.assertEqual(zadosti, [zadost_dovolena])

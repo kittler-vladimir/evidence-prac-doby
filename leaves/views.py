@@ -5,31 +5,31 @@ from django.shortcuts import render, redirect, get_object_or_404
 from django.http import HttpResponseForbidden
 from django.utils import timezone
 
-from .models import TypDovolene, ZadostODovolenou, ZustatekDovolene
-from .forms import ZadostODovolenoForm, ZamitnutiForm
+from .models import TypStavu, ZadostOStav, ZustatekStavu
+from .forms import ZadostOStavForm, ZamitnutiForm
 
 
 @login_required
 def moje_zadosti(request):
-    """Přehled vlastních žádostí o dovolenou."""
+    """Přehled vlastních žádostí a záznamů stavu."""
     employee = request.user.employee
-    zadosti = ZadostODovolenou.objects.filter(
+    zadosti = ZadostOStav.objects.filter(
         employee=employee
     ).select_related("typ").order_by("-vytvoreno")
 
     rok = timezone.localdate().year
     dnes = timezone.localdate()
     zustatky = list(
-        ZustatekDovolene.objects.filter(employee=employee, rok=rok).select_related("typ")
+        ZustatekStavu.objects.filter(employee=employee, rok=rok).select_related("typ")
     )
 
     # Zobrazit i virtuální (dosud nezaložený) zůstatek pro globálně nárokované
-    # typy dovolené (např. indispoziční volno), na které má zaměstnanec nárok
+    # typy stavu (např. indispoziční volno), na které má zaměstnanec nárok
     # už teď, i když zatím nepodal žádnou žádost.
     existujici_typy = {z.typ_id for z in zustatky}
-    for typ in TypDovolene.objects.filter(je_indispozicni_volno=True, aktivni=True):
+    for typ in TypStavu.objects.filter(je_indispozicni_volno=True, aktivni=True):
         if typ.pk not in existujici_typy:
-            zustatky.append(ZustatekDovolene(
+            zustatky.append(ZustatekStavu(
                 employee=employee, rok=rok, typ=typ,
                 narok_hodin=typ.vychozi_narok(dnes), cerpano_hodin=0,
             ))
@@ -42,19 +42,22 @@ def moje_zadosti(request):
 
 @login_required
 def nova_zadost(request):
-    """Zaměstnanec vytvoří novou žádost o dovolenou."""
+    """Zaměstnanec podá novou žádost o stav, nebo si stav rovnou zaznamená."""
     employee = request.user.employee
 
     if request.method == "POST":
-        form = ZadostODovolenoForm(request.POST, employee=employee)
+        form = ZadostOStavForm(request.POST, employee=employee)
         if form.is_valid():
             zadost = form.save(commit=False)
             zadost.employee = employee
             zadost.save()
-            messages.success(request, "Žádost byla odeslána ke schválení.")
+            if zadost.typ.vyzaduje_schvaleni:
+                messages.success(request, "Žádost byla odeslána ke schválení.")
+            else:
+                messages.success(request, "Záznam byl uložen.")
             return redirect("leaves:moje_zadosti")
     else:
-        form = ZadostODovolenoForm(employee=employee)
+        form = ZadostOStavForm(employee=employee)
 
     return render(request, "leaves/nova_zadost.html", {"form": form})
 
@@ -63,9 +66,10 @@ def nova_zadost(request):
 def ke_schvaleni(request):
     """Manažer vidí žádosti čekající na jeho schválení."""
     employee = request.user.employee
-    zadosti = ZadostODovolenou.objects.filter(
+    zadosti = ZadostOStav.objects.filter(
         schvalovatele=employee,
-        stav=ZadostODovolenou.Stav.CEKA,
+        stav=ZadostOStav.Stav.CEKA,
+        typ__vyzaduje_schvaleni=True,
     ).select_related("employee__user", "typ")
 
     return render(request, "leaves/ke_schvaleni.html", {"zadosti": zadosti})
@@ -74,7 +78,7 @@ def ke_schvaleni(request):
 @login_required
 def detail_zadosti(request, pk):
     """Detail žádosti + akce schválení/zamítnutí."""
-    zadost = get_object_or_404(ZadostODovolenou, pk=pk)
+    zadost = get_object_or_404(ZadostOStav, pk=pk)
     employee = request.user.employee
 
     # Přístup: vlastní žádost, nebo schvalovatel, nebo admin
@@ -84,13 +88,26 @@ def detail_zadosti(request, pk):
         return HttpResponseForbidden()
 
     zamitnutí_form = None
-    if je_schvalovatel and zadost.stav == ZadostODovolenou.Stav.CEKA:
+    if je_schvalovatel and zadost.stav == ZadostOStav.Stav.CEKA:
         zamitnutí_form = ZamitnutiForm()
+
+    zustatek = None
+    if zadost.typ.odecita_ze_zustatku:
+        rok = zadost.datum_od.year
+        zustatek = ZustatekStavu.objects.filter(
+            employee=zadost.employee, rok=rok, typ=zadost.typ
+        ).first()
+        if not zustatek:
+            zustatek = ZustatekStavu(
+                employee=zadost.employee, rok=rok, typ=zadost.typ,
+                narok_hodin=zadost.typ.vychozi_narok(zadost.datum_od), cerpano_hodin=0,
+            )
 
     return render(request, "leaves/detail_zadosti.html", {
         "zadost": zadost,
         "je_schvalovatel": je_schvalovatel,
         "zamitnutí_form": zamitnutí_form,
+        "zustatek": zustatek,
     })
 
 
@@ -100,13 +117,13 @@ def schvalit(request, pk):
     if request.method != "POST":
         return redirect("leaves:ke_schvaleni")
 
-    zadost = get_object_or_404(ZadostODovolenou, pk=pk)
+    zadost = get_object_or_404(ZadostOStav, pk=pk)
     employee = request.user.employee
 
     if zadost.schvalovatele != employee and not request.user.is_staff:
         return HttpResponseForbidden()
 
-    if zadost.stav != ZadostODovolenou.Stav.CEKA:
+    if zadost.stav != ZadostOStav.Stav.CEKA:
         messages.warning(request, "Žádost již byla vyřízena.")
         return redirect("leaves:ke_schvaleni")
 
@@ -126,7 +143,7 @@ def zamitnou(request, pk):
     if request.method != "POST":
         return redirect("leaves:ke_schvaleni")
 
-    zadost = get_object_or_404(ZadostODovolenou, pk=pk)
+    zadost = get_object_or_404(ZadostOStav, pk=pk)
     employee = request.user.employee
 
     if zadost.schvalovatele != employee and not request.user.is_staff:
@@ -145,13 +162,13 @@ def stornovat(request, pk):
     if request.method != "POST":
         return redirect("leaves:moje_zadosti")
 
-    zadost = get_object_or_404(ZadostODovolenou, pk=pk, employee=request.user.employee)
+    zadost = get_object_or_404(ZadostOStav, pk=pk, employee=request.user.employee)
 
-    if zadost.stav != ZadostODovolenou.Stav.CEKA:
+    if zadost.stav != ZadostOStav.Stav.CEKA:
         messages.warning(request, "Lze stornovat pouze čekající žádost.")
         return redirect("leaves:moje_zadosti")
 
-    zadost.stav = ZadostODovolenou.Stav.STORNOVÁNO
+    zadost.stav = ZadostOStav.Stav.STORNOVÁNO
     zadost.save()
     messages.success(request, "Žádost byla stornována.")
     return redirect("leaves:moje_zadosti")

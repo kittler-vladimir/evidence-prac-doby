@@ -1,10 +1,10 @@
 from django import forms
-from .models import ZadostODovolenou, TypDovolene, ZustatekDovolene
+from .models import ZadostOStav, TypStavu, ZustatekStavu
 
 
-class ZadostODovolenoForm(forms.ModelForm):
+class ZadostOStavForm(forms.ModelForm):
     class Meta:
-        model = ZadostODovolenou
+        model = ZadostOStav
         fields = ["typ", "datum_od", "datum_do", "poznamka_zamestnance"]
         widgets = {
             "datum_od": forms.DateInput(attrs={"type": "date"}, format="%Y-%m-%d"),
@@ -14,7 +14,7 @@ class ZadostODovolenoForm(forms.ModelForm):
     def __init__(self, *args, employee=None, **kwargs):
         self.employee = employee
         super().__init__(*args, **kwargs)
-        self.fields["typ"].queryset = TypDovolene.objects.filter(aktivni=True)
+        self.fields["typ"].queryset = TypStavu.objects.filter(aktivni=True)
 
     def clean(self):
         cleaned = super().clean()
@@ -29,12 +29,12 @@ class ZadostODovolenoForm(forms.ModelForm):
             typ = cleaned.get("typ")
             if typ and typ.odecita_ze_zustatku and self.employee:
                 rok = datum_od.year
-                zustatek = ZustatekDovolene.objects.filter(
+                zustatek = ZustatekStavu.objects.filter(
                     employee=self.employee, rok=rok, typ=typ
                 ).first()
 
                 # Spočítat hodiny
-                temp = ZadostODovolenou(
+                temp = ZadostOStav(
                     employee=self.employee,
                     datum_od=datum_od,
                     datum_do=datum_do,

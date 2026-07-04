@@ -2,7 +2,7 @@ from dataclasses import dataclass
 
 from django.utils import timezone
 
-from leaves.models import TypDovolene, ZadostODovolenou
+from leaves.models import ZadostOStav
 from timetracking.models import WorkSession
 
 PRITOMEN = "PRITOMEN"
@@ -11,12 +11,6 @@ NEPRITOMEN = "NEPRITOMEN"
 _BADGE_TRIDY = {
     PRITOMEN: "bg-success",
     NEPRITOMEN: "bg-dark",
-    TypDovolene.KategoriePrehled.DOVOLENA: "bg-warning text-dark",
-    TypDovolene.KategoriePrehled.NEMOC: "bg-danger",
-    TypDovolene.KategoriePrehled.INDISPOZICNI_VOLNO: "bg-info text-dark",
-    TypDovolene.KategoriePrehled.SLUZEBNI_VOLNO: "bg-primary",
-    TypDovolene.KategoriePrehled.OCR: "bg-secondary",
-    TypDovolene.KategoriePrehled.JINA: "bg-secondary",
 }
 
 _POPISKY = {
@@ -30,6 +24,15 @@ class StavZamestnance:
     kod: str
     popisek: str
     badge_trida: str
+    barva: str = ""
+
+
+def _stav_z_typu(typ) -> StavZamestnance:
+    """Odznak/popisek platného záznamu čerpá přímo z daného TypStavu — nový
+    typ založený jen v adminu (bez odkazu na KategoriePrehled) tak funguje
+    bez jakéhokoli zásahu do kódu. Záložní bg-secondary pro případ, že by
+    typ měl prázdnou barvu."""
+    return StavZamestnance(typ.zkratka, typ.nazev, "bg-secondary" if not typ.barva else "", typ.barva)
 
 
 def stavy_zamestnancu(zamestnanci, datum) -> dict:
@@ -37,8 +40,10 @@ def stavy_zamestnancu(zamestnanci, datum) -> dict:
     Vrátí {employee_id: StavZamestnance} pro danou skupinu zaměstnanců a datum,
     jednou dávkou (2 dotazy celkem, ne 2 na zaměstnance).
 
-    Pravidlo priority: Přítomen > schválená absence (dle
-    TypDovolene.kategorie_pro_prehled) > Nepřítomen.
+    Pravidlo priority: platný záznam typu přítomnosti (TypStavu.je_pritomnost,
+    např. home office) > Přítomen (dle WorkSession) > platný záznam typu
+    nepřítomnosti > Nepřítomen. "Platný" = stav SCHVALENO, ať už schválením
+    vedoucím, nebo automaticky u typů se samo-záznamem (vyzaduje_schvaleni=False).
 
     "Přítomen" k dnešnímu dni znamená aktuálně odpíchnutou (neuzavřenou)
     WorkSession; pro jiná data stačí jakákoli WorkSession toho dne — pozor,
@@ -55,30 +60,31 @@ def stavy_zamestnancu(zamestnanci, datum) -> dict:
         sessions = sessions.filter(konec__isnull=True)
     pritomni_ids = set(sessions.values_list("employee_id", flat=True))
 
-    zadost_podle_zamestnance = {}
-    zadosti = ZadostODovolenou.objects.filter(
+    zaznamy_podle_zamestnance = {}
+    zaznamy = ZadostOStav.objects.filter(
         employee__in=zamestnanci,
-        stav=ZadostODovolenou.Stav.SCHVALENO,
+        stav=ZadostOStav.Stav.SCHVALENO,
         datum_od__lte=datum,
         datum_do__gte=datum,
     ).select_related("typ").order_by("-vytvoreno")
-    for zadost in zadosti:
-        zadost_podle_zamestnance.setdefault(zadost.employee_id, zadost)
+    for zaznam in zaznamy:
+        zaznamy_podle_zamestnance.setdefault(zaznam.employee_id, []).append(zaznam)
 
     vysledek = {}
     for zam in zamestnanci:
+        zaznamy_zam = zaznamy_podle_zamestnance.get(zam.pk, [])
+
+        pritomnostni_zaznam = next((z for z in zaznamy_zam if z.typ.je_pritomnost), None)
+        if pritomnostni_zaznam:
+            vysledek[zam.pk] = _stav_z_typu(pritomnostni_zaznam.typ)
+            continue
+
         if zam.pk in pritomni_ids:
             vysledek[zam.pk] = StavZamestnance(PRITOMEN, _POPISKY[PRITOMEN], _BADGE_TRIDY[PRITOMEN])
             continue
 
-        zadost = zadost_podle_zamestnance.get(zam.pk)
-        if zadost:
-            kategorie = zadost.typ.kategorie_pro_prehled
-            vysledek[zam.pk] = StavZamestnance(
-                kategorie,
-                zadost.typ.get_kategorie_pro_prehled_display(),
-                _BADGE_TRIDY.get(kategorie, _BADGE_TRIDY[TypDovolene.KategoriePrehled.JINA]),
-            )
+        if zaznamy_zam:
+            vysledek[zam.pk] = _stav_z_typu(zaznamy_zam[0].typ)
         else:
             vysledek[zam.pk] = StavZamestnance(NEPRITOMEN, _POPISKY[NEPRITOMEN], _BADGE_TRIDY[NEPRITOMEN])
 

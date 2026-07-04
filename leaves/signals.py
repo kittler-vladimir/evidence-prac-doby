@@ -4,7 +4,7 @@ from django.core.mail import send_mail
 from django.template.loader import render_to_string
 from django.conf import settings
 
-from .models import ZadostODovolenou
+from .models import ZadostOStav
 
 
 def _posli_email(subject: str, template: str, context: dict, recipients: list[str]):
@@ -21,7 +21,7 @@ def _posli_email(subject: str, template: str, context: dict, recipients: list[st
     )
 
 
-@receiver(post_save, sender=ZadostODovolenou)
+@receiver(post_save, sender=ZadostOStav)
 def notifikace_zadost(sender, instance, created, **kwargs):
     """
     Odesílá e-mailové notifikace:
@@ -35,7 +35,7 @@ def notifikace_zadost(sender, instance, created, **kwargs):
         # Notifikace schvalovateli
         if zadost.schvalovatele and zadost.schvalovatele.email:
             _posli_email(
-                subject=f"Nová žádost o dovolenou – {zadost.employee.jmeno}",
+                subject=f"Nová žádost o {zadost.typ.nazev.lower()} – {zadost.employee.jmeno}",
                 template="leaves/emails/nova_zadost.txt",
                 context={"zadost": zadost},
                 recipients=[zadost.schvalovatele.email],
@@ -43,17 +43,17 @@ def notifikace_zadost(sender, instance, created, **kwargs):
         return
 
     # Při změně stavu
-    if zadost.stav == ZadostODovolenou.Stav.SCHVALENO:
+    if zadost.stav == ZadostOStav.Stav.SCHVALENO:
         _posli_email(
-            subject="Vaše žádost o dovolenou byla schválena",
+            subject=f"Vaše žádost o {zadost.typ.nazev.lower()} byla schválena",
             template="leaves/emails/schvaleno.txt",
             context={"zadost": zadost},
             recipients=[zadost.employee.email],
         )
 
-    elif zadost.stav == ZadostODovolenou.Stav.ZAMITNUTO:
+    elif zadost.stav == ZadostOStav.Stav.ZAMITNUTO:
         _posli_email(
-            subject="Vaše žádost o dovolenou byla zamítnuta",
+            subject=f"Vaše žádost o {zadost.typ.nazev.lower()} byla zamítnuta",
             template="leaves/emails/zamitnuto.txt",
             context={"zadost": zadost},
             recipients=[zadost.employee.email],
