@@ -28,6 +28,7 @@ venv/Scripts/python.exe manage.py migrate
 venv/Scripts/python.exe manage.py createsuperuser
 venv/Scripts/python.exe manage.py generuj_svatky <rok> [--zeme CZ] [--prepsat]   # generate CZ public holidays for a year
 venv/Scripts/python.exe manage.py close_open_sessions [--hodiny 14]              # flag forgotten clock-outs
+venv/Scripts/python.exe manage.py obnov_rocni_naroky [--rok <rok>]               # roll vacation/IV balances into a new year (run via Celery Beat every 1 January)
 venv/Scripts/python.exe manage.py runserver
 
 # Celery (separate terminals)

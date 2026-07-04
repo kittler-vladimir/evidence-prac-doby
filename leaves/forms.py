@@ -43,7 +43,7 @@ class ZadostOStavForm(forms.ModelForm):
 
                 if zustatek:
                     zbyva = zustatek.zbyvajici_hodin
-                elif typ.je_indispozicni_volno:
+                elif typ.je_indispozicni_volno or typ.je_dovolena:
                     # Zůstatek ještě nebyl založen — virtuální nárok z globálního nastavení.
                     zbyva = typ.vychozi_narok(datum_od)
                 else:
