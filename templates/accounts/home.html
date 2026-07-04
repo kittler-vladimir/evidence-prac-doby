@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block title %}Domů{% endblock %}
+
+{% block content %}
+<h4 class="mb-4">Vítejte, {{ user.get_full_name }}</h4>
+
+<div class="row g-4">
+
+  <div class="col-md-4">
+    <a href="{% url 'timetracking:dashboard' %}" class="text-decoration-none">
+      <div class="card shadow-sm h-100">
+        <div class="card-body text-center py-4">
+          <i class="bi bi-clock-history text-primary" style="font-size:2.5rem"></i>
+          <h5 class="mt-3 mb-1">Docházka</h5>
+          <p class="text-muted small mb-0">Příchod, odchod a přehled dnešního dne</p>
+        </div>
+      </div>
+    </a>
+  </div>
+
+  <div class="col-md-4">
+    <a href="{% url 'leaves:moje_zadosti' %}" class="text-decoration-none">
+      <div class="card shadow-sm h-100">
+        <div class="card-body text-center py-4">
+          <i class="bi bi-calendar-check text-primary" style="font-size:2.5rem"></i>
+          <h5 class="mt-3 mb-1">Žádosti a stavy</h5>
+          <p class="text-muted small mb-0">Dovolená, nemoc, home office a další</p>
+        </div>
+      </div>
+    </a>
+  </div>
+
+  {% if user.employee or user.is_staff %}
+  <div class="col-md-4">
+    <a href="{% url 'reports:prehled_pritomnosti' %}" class="text-decoration-none">
+      <div class="card shadow-sm h-100">
+        <div class="card-body text-center py-4">
+          <i class="bi bi-person-check text-primary" style="font-size:2.5rem"></i>
+          <h5 class="mt-3 mb-1">Přítomnost</h5>
+          <p class="text-muted small mb-0">Denní přehled přítomnosti a vyhledávání</p>
+        </div>
+      </div>
+    </a>
+  </div>
+  {% endif %}
+
+  {% if user.employee.oddeleni.vedouci == user.employee or user.is_staff %}
+  <div class="col-md-4">
+    <a href="{% url 'leaves:ke_schvaleni' %}" class="text-decoration-none">
+      <div class="card shadow-sm h-100">
+        <div class="card-body text-center py-4">
+          <i class="bi bi-check2-circle text-primary" style="font-size:2.5rem"></i>
+          <h5 class="mt-3 mb-1">Ke schválení</h5>
+          <p class="text-muted small mb-0">Žádosti čekající na vaše schválení</p>
+        </div>
+      </div>
+    </a>
+  </div>
+
+  <div class="col-md-4">
+    <a href="{% url 'reports:prehled_tymu' %}" class="text-decoration-none">
+      <div class="card shadow-sm h-100">
+        <div class="card-body text-center py-4">
+          <i class="bi bi-people text-primary" style="font-size:2.5rem"></i>
+          <h5 class="mt-3 mb-1">Tým</h5>
+          <p class="text-muted small mb-0">Přehled týmu, kterému velíte</p>
+        </div>
+      </div>
+    </a>
+  </div>
+  {% endif %}
+
+  {% if user.is_staff %}
+  <div class="col-md-4">
+    <a href="{% url 'accounts:seznam_zamestnancu' %}" class="text-decoration-none">
+      <div class="card shadow-sm h-100">
+        <div class="card-body text-center py-4">
+          <i class="bi bi-person-gear text-primary" style="font-size:2.5rem"></i>
+          <h5 class="mt-3 mb-1">Zaměstnanci</h5>
+          <p class="text-muted small mb-0">Správa zaměstnanců a organizační struktury</p>
+        </div>
+      </div>
+    </a>
+  </div>
+  {% endif %}
+
+</div>
+{% endblock %}
