@@ -1,6 +1,7 @@
 from django.contrib.auth.decorators import login_required
 from django.contrib import messages
 from django.core.exceptions import ValidationError
+from django.db import models
 from django.shortcuts import render, redirect, get_object_or_404
 from django.http import HttpResponseForbidden
 from django.utils import timezone
@@ -24,10 +25,13 @@ def moje_zadosti(request):
     )
 
     # Zobrazit i virtuální (dosud nezaložený) zůstatek pro globálně nárokované
-    # typy stavu (např. indispoziční volno), na které má zaměstnanec nárok
-    # už teď, i když zatím nepodal žádnou žádost.
+    # typy stavu (např. indispoziční volno, dovolená), na které má zaměstnanec
+    # nárok už teď, i když zatím nepodal žádnou žádost.
     existujici_typy = {z.typ_id for z in zustatky}
-    for typ in TypStavu.objects.filter(je_indispozicni_volno=True, aktivni=True):
+    globalne_narokovane = TypStavu.objects.filter(aktivni=True).filter(
+        models.Q(je_indispozicni_volno=True) | models.Q(je_dovolena=True)
+    )
+    for typ in globalne_narokovane:
         if typ.pk not in existujici_typy:
             zustatky.append(ZustatekStavu(
                 employee=employee, rok=rok, typ=typ,
