@@ -37,7 +37,7 @@
           <td>{{ v.employee.oddeleni }}</td>
           <td>{{ v.employee.email }}</td>
           <td>{{ v.employee.telefon|default:"—" }}</td>
-          <td><span class="badge {{ v.stav.badge_trida }}">{{ v.stav.popisek }}</span></td>
+          <td><span class="badge {{ v.stav.badge_trida }}" {% if v.stav.barva %}style="background-color: {{ v.stav.barva }};"{% endif %}>{{ v.stav.popisek }}</span></td>
         </tr>
         {% endfor %}
       </tbody>

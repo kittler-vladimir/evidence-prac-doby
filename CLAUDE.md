@@ -43,7 +43,7 @@ Four Django apps under `config/` (settings/urls/celery root), wired together thr
 
 - **`accounts`** — custom `User` (email-based login, `AUTH_USER_MODEL = "accounts.User"`), `Employee` profile, org hierarchy (`Sekce` → `Odbor` → `Oddeleni`), `TypUvazku` (contract type: hours/day, hours/week), `HistoriePrislusenosti` (department transfer history). Also owns `holidays_model.py` (`Zeme`, `StatniSvatek`, generated via the `holidays` PyPI library).
 - **`timetracking`** — `WorkSession` (one clock-in/clock-out block; overlap and end-after-start validated in `clean()`) and `WorkdaySummary` (per-employee-per-day rollup, recomputed via `WorkdaySummary.prepocitej()`).
-- **`leaves`** — `TypDovolene` (leave type), `ZustatekDovolene` (yearly hour balance), `ZadostODovolenou` (leave request with an approval workflow: `schval()` / `zamitni()`).
+- **`leaves`** — `TypStavu` (employee state type — dovolená, nemoc, indispoziční volno, home office, etc.; `vyzaduje_schvaleni` picks between the two workflows below, `je_pritomnost` marks presence-type states like home office), `ZustatekStavu` (yearly hour balance, only relevant for `odecita_ze_zustatku=True` types), `ZadostOStav` (a request — for `vyzaduje_schvaleni=True` types like dovolená/indispoziční volno, goes through an approval workflow: `schval()` / `zamitni()`; for `vyzaduje_schvaleni=False` types like nemoc/OČR/služební volno/home office, `save()` self-approves immediately with no approver and no email).
 - **`reports`** — read-only views over the above: team overview (`prehled_tymu`) and XLSX export (`export_xlsx`, built with `openpyxl`).
 
 URL namespaces are mounted in `config/urls.py`: `accounts` at `/`, `timetracking` at `/dochazka/`, `leaves` at `/dovolena/`, `reports` at `/reporty/`.
@@ -54,7 +54,7 @@ URL namespaces are mounted in `config/urls.py`: `accounts` at `/`, `timetracking
 Sekce → Odbor → Oddeleni → Employee
 ```
 
-Each level has an optional `vedouci` (manager) FK to `Employee`. `Employee.get_schvalovatel()` walks up this chain (department head → division head → section head) to find the direct approver; if no manager is set at any level, it returns `None` and an admin must approve manually. `ZadostODovolenou.save()` auto-assigns `schvalovatele` from this method if not already set.
+Each level has an optional `vedouci` (manager) FK to `Employee`. `Employee.get_schvalovatel()` walks up this chain (department head → division head → section head) to find the direct approver; if no manager is set at any level, it returns `None` and an admin must approve manually. `ZadostOStav.save()` auto-assigns `schvalovatele` from this method if not already set — but only for `typ.vyzaduje_schvaleni=True` requests; self-recorded types skip this entirely.
 
 ### Recompute-on-save pattern
 
@@ -67,12 +67,12 @@ Each level has an optional `vedouci` (manager) FK to `Employee`. `Employee.get_s
 | Mandatory break after | `BREAK_THRESHOLD_HOURS` = 6 hours worked |
 | Break length | `MANDATORY_BREAK_MINUTES` = 30 min (not counted as worked time) |
 | Overtime | worked minutes beyond `Employee.typ_uvazku.hodiny_denne × 60` for that day |
-| Leave accounting | tracked in hours; `ZadostODovolenou.vypocitej_hodiny()` counts weekdays excluding `StatniSvatek` entries, × `hodiny_denne` |
+| Leave accounting | tracked in hours; `ZadostOStav.vypocitej_hodiny()` counts weekdays excluding `StatniSvatek` entries, × `hodiny_denne`, for both approval-based and self-recorded requests |
 | Public holidays | generated per-year from the `holidays` library (`generuj_svatky_cr`), editable afterward in Django admin |
 
 ### Notifications
 
-`leaves/signals.py` sends email on `ZadostODovolenou` `post_save`: new request → approver, approved/rejected → employee. Templates live in `templates/leaves/emails/*.txt`. Emails are sent with `fail_silently=True`.
+`leaves/signals.py` sends email on `ZadostOStav` `post_save`: new request → approver, approved/rejected → employee. This only fires for `vyzaduje_schvaleni=True` types (dovolená, indispoziční volno) — self-recorded types are created with `stav=SCHVALENO` directly and have no `schvalovatele`, so no email goes out. Templates live in `templates/leaves/emails/*.txt`. Emails are sent with `fail_silently=True`.
 
 ### Scheduled maintenance
 

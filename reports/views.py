@@ -9,7 +9,6 @@ from django.http import HttpResponse
 
 from accounts.models import Employee, Oddeleni
 from timetracking.models import WorkdaySummary
-from leaves.models import TypDovolene, ZadostODovolenou, ZustatekDovolene
 from .services import NEPRITOMEN, PRITOMEN, stavy_zamestnancu
 
 DELKA_VYHLEDAVACIHO_DOTAZU = 2
@@ -163,12 +162,21 @@ def prehled_pritomnosti(request):
     stavy = stavy_zamestnancu(zamestnanci, datum)
     radky = [{"employee": zam, "stav": stavy[zam.pk]} for zam in zamestnanci]
 
+    # Kategorie se sestavují dynamicky z toho, co se ten den skutečně
+    # vyskytlo — nový TypStavu se tak v souhrnu objeví bez zásahu do kódu.
+    # Pořadí se drží prvního výskytu v radky (stabilní), ne abecedně dle
+    # zkratky, aby se kategorie neřadily podle náhody v pojmenování.
+    pocitadlo = Counter(r["stav"].kod for r in radky)
+    popisky_ostatnich = {}
+    for r in radky:
+        kod = r["stav"].kod
+        if kod not in (PRITOMEN, NEPRITOMEN):
+            popisky_ostatnich.setdefault(kod, r["stav"].popisek)
     poradi_kategorii = [
         (PRITOMEN, "Přítomen"),
-        *[(k.value, k.label) for k in TypDovolene.KategoriePrehled],
+        *popisky_ostatnich.items(),
         (NEPRITOMEN, "Nepřítomen"),
     ]
-    pocitadlo = Counter(r["stav"].kod for r in radky)
     pocty = [
         {"popisek": popisek, "pocet": pocitadlo[kod]}
         for kod, popisek in poradi_kategorii

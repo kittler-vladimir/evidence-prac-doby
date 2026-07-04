@@ -1,13 +1,13 @@
 {% extends "base.html" %}
 {% load crispy_forms_tags %}
-{% block title %}Žádost o dovolenou{% endblock %}
+{% block title %}Detail záznamu{% endblock %}
 
 {% block content %}
 <div class="row justify-content-center">
   <div class="col-md-7">
     <div class="card shadow-sm">
       <div class="card-header d-flex justify-content-between align-items-center">
-        <strong>Žádost o dovolenou – {{ zadost.employee.jmeno }}</strong>
+        <strong>Detail záznamu – {{ zadost.employee.jmeno }}</strong>
         {% if zadost.stav == "ceka" %}
           <span class="badge bg-warning text-dark">{{ zadost.get_stav_display }}</span>
         {% elif zadost.stav == "schvaleno" %}
@@ -28,6 +28,14 @@
 
           <dt class="col-sm-4">Počet hodin</dt>
           <dd class="col-sm-8">{{ zadost.pocet_hodin }}h</dd>
+
+          {% if zustatek %}
+          <dt class="col-sm-4">Zůstatek {{ zadost.typ.nazev }} ({{ zustatek.rok }})</dt>
+          <dd class="col-sm-8">
+            Nárok: {{ zustatek.narok_hodin }}h · Čerpáno: {{ zustatek.cerpano_hodin }}h ·
+            Zbývá: <strong>{{ zustatek.zbyvajici_hodin }}h</strong>
+          </dd>
+          {% endif %}
 
           <dt class="col-sm-4">Schvalovatel</dt>
           <dd class="col-sm-8">{{ zadost.schvalovatele.jmeno|default:"—" }}</dd>
