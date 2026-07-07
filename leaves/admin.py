@@ -1,4 +1,6 @@
-from django.contrib import admin
+from django.contrib import admin, messages
+from django.core.exceptions import ValidationError
+from django.utils.translation import gettext_lazy as _
 from .models import (
     TypStavu,
     NarokIndispozicnihoVolna,
@@ -48,4 +50,31 @@ class ZadostOStavAdmin(admin.ModelAdmin):
     list_filter = ["stav", "typ"]
     search_fields = ["employee__user__last_name"]
     date_hierarchy = "datum_od"
-    readonly_fields = ["pocet_hodin", "vytvoreno", "upraveno"]
+    # "stav" a schvalovací pole se nesmí editovat napřímo — obchází to
+    # ZadostOStav.schval()/zamitni() (aktualizace ZustatekStavu.cerpano_hodin).
+    # Schvalování/zamítání jde jen přes akce níže.
+    readonly_fields = ["pocet_hodin", "stav", "schvaleno_kym", "schvaleno_kdy", "vytvoreno", "upraveno"]
+    actions = ["schvalit_zadosti", "zamitnout_zadosti"]
+
+    @admin.action(description=_("Schválit vybrané žádosti"))
+    def schvalit_zadosti(self, request, queryset):
+        schvalovatel = getattr(request.user, "employee", None)
+        pocet = 0
+        for zadost in queryset.filter(stav=ZadostOStav.Stav.CEKA):
+            try:
+                zadost.schval(schvalovatel)
+                pocet += 1
+            except ValidationError as e:
+                self.message_user(request, f"{zadost}: {e.message}", level=messages.ERROR)
+        if pocet:
+            self.message_user(request, _("Schváleno žádostí: %(pocet)s") % {"pocet": pocet})
+
+    @admin.action(description=_("Zamítnout vybrané žádosti"))
+    def zamitnout_zadosti(self, request, queryset):
+        schvalovatel = getattr(request.user, "employee", None)
+        pocet = 0
+        for zadost in queryset.filter(stav=ZadostOStav.Stav.CEKA):
+            zadost.zamitni(schvalovatel)
+            pocet += 1
+        if pocet:
+            self.message_user(request, _("Zamítnuto žádostí: %(pocet)s") % {"pocet": pocet})

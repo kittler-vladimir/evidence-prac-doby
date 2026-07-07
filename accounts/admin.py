@@ -55,6 +55,17 @@ class EmployeeAdmin(admin.ModelAdmin):
     inlines = [HistorieInline]
     raw_id_fields = ["user"]
 
+    def save_formset(self, request, form, formset, change):
+        # "zmenil" je readonly (nelze ho zadat ve formuláři), ale u nově
+        # založené historie ho musíme dosadit sami — jinak zůstane prázdné,
+        # na rozdíl od dedikovaného formuláře v accounts/forms.py.
+        instances = formset.save(commit=False)
+        for instance in instances:
+            if isinstance(instance, HistoriePrislusenosti) and instance.pk is None:
+                instance.zmenil = request.user
+            instance.save()
+        formset.save_m2m()
+
 
 @admin.register(Zeme)
 class ZemeAdmin(admin.ModelAdmin):

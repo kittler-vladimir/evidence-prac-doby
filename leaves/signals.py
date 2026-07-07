@@ -42,6 +42,11 @@ def notifikace_zadost(sender, instance, created, **kwargs):
             )
         return
 
+    # Poslat jen při skutečném přechodu stavu, ne při každém dalším uložení
+    # už vyřízené žádosti (viz ZadostOStav.save()).
+    if not getattr(zadost, "_stav_se_zmenil", True):
+        return
+
     # Při změně stavu
     if zadost.stav == ZadostOStav.Stav.SCHVALENO:
         _posli_email(

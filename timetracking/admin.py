@@ -13,10 +13,24 @@ class WorkSessionAdmin(admin.ModelAdmin):
 
 @admin.register(WorkdaySummary)
 class WorkdaySummaryAdmin(admin.ModelAdmin):
+    """
+    WorkdaySummary se nikdy nezapisuje ručně — je to odvozený souhrn
+    přepočítaný signálem z WorkSession (viz WorkdaySummary.prepocitej()).
+    Admin proto slouží jen k náhledu, ne k zápisu; oprava se dělá na
+    WorkSession, odkud se souhrn přepočítá znovu.
+    """
+
     list_display = ["employee", "datum", "odpracovane_minuty", "prescos_minuty", "je_svatek"]
     list_filter = ["je_svatek", "je_vikend"]
     date_hierarchy = "datum"
     search_fields = ["employee__user__last_name"]
     readonly_fields = [
-        "hrube_minuty", "prestavka_minuty", "odpracovane_minuty", "prescos_minuty"
+        "employee", "datum", "hrube_minuty", "prestavka_minuty",
+        "odpracovane_minuty", "prescos_minuty", "je_svatek", "je_vikend",
     ]
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False

@@ -379,6 +379,11 @@ class ZadostOStav(models.Model):
 
     def save(self, *args, **kwargs):
         je_novy = self.pk is None
+        puvodni_stav = None
+        if not je_novy:
+            puvodni_stav = (
+                ZadostOStav.objects.filter(pk=self.pk).values_list("stav", flat=True).first()
+            )
 
         # Přepočítat hodiny před uložením pokud je potřeba
         if not self.pocet_hodin and self.datum_od and self.datum_do:
@@ -394,3 +399,8 @@ class ZadostOStav(models.Model):
             self.schvalovatele = self.employee.get_schvalovatel()
 
         super().save(*args, **kwargs)
+
+        # Signálu se hodí vědět, jestli šlo o skutečný přechod stavu (aby
+        # neposílal "schváleno/zamítnuto" znovu při každém dalším uložení
+        # už vyřízené žádosti, např. při editaci poznámky v adminu).
+        self._stav_se_zmenil = je_novy or puvodni_stav != self.stav
