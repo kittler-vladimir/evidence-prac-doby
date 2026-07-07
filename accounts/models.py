@@ -1,4 +1,5 @@
 from django.contrib.auth.models import AbstractUser
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils.translation import gettext_lazy as _
 
@@ -109,6 +110,11 @@ class Oddeleni(models.Model):
 
 class TypUvazku(models.Model):
     """Číselník typů pracovních úvazků."""
+
+    class DruhPracovniDoby(models.TextChoices):
+        PRUZNA = "PRUZNA", _("Pružná")
+        PEVNA = "PEVNA", _("Pevná")
+
     nazev = models.CharField(_("název"), max_length=100)  # např. "Plný úvazek"
     hodiny_denne = models.DecimalField(
         _("hodin denně"), max_digits=4, decimal_places=2
@@ -116,6 +122,17 @@ class TypUvazku(models.Model):
     hodiny_tyydne = models.DecimalField(
         _("hodin týdně"), max_digits=5, decimal_places=2
     )  # např. 40.00
+    druh_pracovni_doby = models.CharField(
+        _("druh pracovní doby"),
+        max_length=10,
+        choices=DruhPracovniDoby.choices,
+        default=DruhPracovniDoby.PRUZNA,
+        help_text=_(
+            "Pružná: jeden časový blok (jádrová doba). Pevná: jeden nebo "
+            "více závazných časových bloků. Zatím jen evidence — bloky "
+            "se nikde nevynucují, slouží jako podklad pro budoucí validaci."
+        ),
+    )
     aktivni = models.BooleanField(_("aktivní"), default=True)
 
     class Meta:
@@ -125,6 +142,36 @@ class TypUvazku(models.Model):
 
     def __str__(self):
         return f"{self.nazev} ({self.hodiny_denne}h/den)"
+
+
+class CasovyBlokUvazku(models.Model):
+    """
+    Časový blok pracovní doby patřící k typu úvazku — jádrová doba u
+    pružné pracovní doby (právě jeden blok), nebo jeden z více závazných
+    bloků u pevné pracovní doby. Počet bloků vůči druhu typu úvazku
+    validuje admin (TypUvazkuAdmin), ne tento model.
+    """
+
+    typ_uvazku = models.ForeignKey(
+        TypUvazku,
+        on_delete=models.CASCADE,
+        related_name="casove_bloky",
+        verbose_name=_("typ úvazku"),
+    )
+    blok_od = models.TimeField(_("od"))
+    blok_do = models.TimeField(_("do"))
+
+    class Meta:
+        verbose_name = _("časový blok pracovní doby")
+        verbose_name_plural = _("časové bloky pracovní doby")
+        ordering = ["blok_od"]
+
+    def __str__(self):
+        return f"{self.blok_od:%H:%M}–{self.blok_do:%H:%M}"
+
+    def clean(self):
+        if self.blok_od and self.blok_do and self.blok_do <= self.blok_od:
+            raise ValidationError(_("Konec bloku musí být po jeho začátku."))
 
 
 # ---------------------------------------------------------------------------

@@ -1,5 +1,6 @@
 from django import forms
-from .models import WorkSession
+from django.db.models import Q
+from .models import WorkSession, Pohyb, TypPohybu
 
 
 class WorkSessionOpravitForm(forms.ModelForm):
@@ -66,4 +67,53 @@ class WorkSessionRucneForm(forms.ModelForm):
                 raise forms.ValidationError(
                     "Tento časový blok se překrývá s existujícím záznamem."
                 )
+        return cleaned
+
+
+class PohybRucneForm(forms.ModelForm):
+    """Formulář pro zpětné doplnění pohybu do existujícího pracovního bloku."""
+
+    class Meta:
+        model = Pohyb
+        fields = ["typ", "zacatek", "konec", "poznamka"]
+        widgets = {
+            "zacatek": forms.DateTimeInput(
+                attrs={"type": "datetime-local"}, format="%Y-%m-%dT%H:%M"
+            ),
+            "konec": forms.DateTimeInput(
+                attrs={"type": "datetime-local"}, format="%Y-%m-%dT%H:%M"
+            ),
+        }
+
+    def __init__(self, *args, employee=None, **kwargs):
+        self.employee = employee
+        super().__init__(*args, **kwargs)
+        self.fields["typ"].queryset = TypPohybu.objects.filter(aktivni=True)
+        if self.instance.zacatek:
+            self.initial["zacatek"] = self.instance.zacatek.strftime("%Y-%m-%dT%H:%M")
+        if self.instance.konec:
+            self.initial["konec"] = self.instance.konec.strftime("%Y-%m-%dT%H:%M")
+
+    def clean(self):
+        cleaned = super().clean()
+        zacatek = cleaned.get("zacatek")
+        konec = cleaned.get("konec")
+
+        if zacatek and konec and konec <= zacatek:
+            raise forms.ValidationError("Konec musí být po začátku.")
+
+        if zacatek and self.employee:
+            horni_hranice = konec or zacatek
+            session = (
+                WorkSession.objects.filter(employee=self.employee, zacatek__lte=zacatek)
+                .filter(Q(konec__isnull=True) | Q(konec__gte=horni_hranice))
+                .order_by("-zacatek")
+                .first()
+            )
+            if not session:
+                raise forms.ValidationError(
+                    "Pro tento čas nebyl nalezen odpovídající pracovní blok (příchod/odchod)."
+                )
+            self.instance.work_session = session
+
         return cleaned

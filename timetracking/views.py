@@ -4,8 +4,8 @@ from django.shortcuts import render, redirect, get_object_or_404
 from django.utils import timezone
 from django.http import HttpResponseForbidden
 
-from .models import WorkSession, WorkdaySummary
-from .forms import WorkSessionOpravitForm, WorkSessionRucneForm
+from .models import WorkSession, WorkdaySummary, Pohyb, TypPohybu
+from .forms import WorkSessionOpravitForm, WorkSessionRucneForm, PohybRucneForm
 
 
 @login_required
@@ -18,6 +18,17 @@ def dashboard(request):
         employee=employee, konec__isnull=True
     ).first()
 
+    otevreny_pohyb = None
+    if aktivni_session:
+        otevreny_pohyb = Pohyb.objects.filter(
+            work_session=aktivni_session, konec__isnull=True
+        ).first()
+
+    dnesni_pohyby = Pohyb.objects.filter(
+        work_session__employee=employee,
+        work_session__zacatek__date=dnes,
+    ).select_related("typ").order_by("zacatek")
+
     souhrn = WorkdaySummary.objects.filter(employee=employee, datum=dnes).first()
 
     posledni_tydny = WorkdaySummary.objects.filter(employee=employee).order_by("-datum")[:14]
@@ -25,6 +36,9 @@ def dashboard(request):
     context = {
         "employee": employee,
         "aktivni_session": aktivni_session,
+        "otevreny_pohyb": otevreny_pohyb,
+        "dnesni_pohyby": dnesni_pohyby,
+        "typy_pohybu": TypPohybu.objects.filter(aktivni=True),
         "souhrn": souhrn,
         "posledni_tydny": posledni_tydny,
         "dnes": dnes,
@@ -69,9 +83,67 @@ def clock_out(request):
         messages.warning(request, "Nemáte aktivní příchod.")
         return redirect("timetracking:dashboard")
 
+    if Pohyb.objects.filter(work_session=session, konec__isnull=True).exists():
+        messages.warning(request, "Nejprve zapište návrat z pohybu.")
+        return redirect("timetracking:dashboard")
+
     session.konec = timezone.now()
     session.save()
     messages.success(request, "Odchod zaznamenán.")
+    return redirect("timetracking:dashboard")
+
+
+@login_required
+def start_pohyb(request):
+    """Zahájí pohyb (oběd, lékař...) v rámci probíhajícího pracovního bloku."""
+    if request.method != "POST":
+        return redirect("timetracking:dashboard")
+
+    employee = request.user.employee
+    session = WorkSession.objects.filter(employee=employee, konec__isnull=True).first()
+
+    if not session:
+        messages.warning(request, "Nejste přihlášen/a k práci.")
+        return redirect("timetracking:dashboard")
+
+    if Pohyb.objects.filter(work_session=session, konec__isnull=True).exists():
+        messages.warning(request, "Již máte zahájený pohyb. Nejprve zapište návrat.")
+        return redirect("timetracking:dashboard")
+
+    typ_id = request.POST.get("typ_id", "")
+    typ = TypPohybu.objects.filter(pk=typ_id, aktivni=True).first() if typ_id.isdigit() else None
+    if not typ:
+        messages.error(request, "Vyberte platný typ pohybu.")
+        return redirect("timetracking:dashboard")
+
+    pohyb = Pohyb(work_session=session, typ=typ, zacatek=timezone.now())
+    pohyb.full_clean()
+    pohyb.save()
+    messages.success(request, "Pohyb zaznamenán.")
+    return redirect("timetracking:dashboard")
+
+
+@login_required
+def return_pohyb(request):
+    """Ukončí probíhající pohyb (návrat)."""
+    if request.method != "POST":
+        return redirect("timetracking:dashboard")
+
+    employee = request.user.employee
+    pohyb = Pohyb.objects.filter(
+        work_session__employee=employee,
+        work_session__konec__isnull=True,
+        konec__isnull=True,
+    ).first()
+
+    if not pohyb:
+        messages.warning(request, "Nemáte žádný probíhající pohyb.")
+        return redirect("timetracking:dashboard")
+
+    pohyb.konec = timezone.now()
+    pohyb.full_clean()
+    pohyb.save()
+    messages.success(request, "Návrat zaznamenán.")
     return redirect("timetracking:dashboard")
 
 
@@ -146,3 +218,20 @@ def pridat_session(request):
         form = WorkSessionRucneForm(employee=employee)
 
     return render(request, "timetracking/pridat_session.html", {"form": form})
+
+
+@login_required
+def pridat_pohyb(request):
+    """Ruční zpětné doplnění pohybu do existujícího pracovního bloku."""
+    employee = request.user.employee
+
+    if request.method == "POST":
+        form = PohybRucneForm(request.POST, employee=employee)
+        if form.is_valid():
+            form.save()
+            messages.success(request, "Pohyb byl přidán.")
+            return redirect("timetracking:dashboard")
+    else:
+        form = PohybRucneForm(employee=employee)
+
+    return render(request, "timetracking/pridat_pohyb.html", {"form": form})

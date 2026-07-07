@@ -55,6 +55,17 @@ class WorkSession(models.Model):
         if self.konec and self.zacatek and self.konec <= self.zacatek:
             raise ValidationError(_("Konec musí být po začátku."))
 
+        # Blok nelze uzavřít, dokud v něm probíhá pohyb (jinak by ho
+        # zaměstnanec už nikdy sám nemohl uzavřít přes návrat z pohybu).
+        # Týká se jen uzavírání existujícího bloku — nový blok ještě nemůže
+        # mít žádný navázaný pohyb.
+        if self.konec and self.pk and Pohyb.objects.filter(
+            work_session_id=self.pk, konec__isnull=True
+        ).exists():
+            raise ValidationError(
+                _("Nelze uzavřít blok, dokud v něm probíhá pohyb — nejprve zapište návrat.")
+            )
+
         # Kontrola překryvu s existujícími bloky stejného zaměstnance
         if self.zacatek:
             qs = WorkSession.objects.filter(employee=self.employee)
@@ -81,6 +92,117 @@ class WorkSession(models.Model):
             return None
         delta = self.konec - self.zacatek
         return int(delta.total_seconds() // 60)
+
+
+class TypPohybu(models.Model):
+    """Číselník typů pohybu během pracovní doby (oběd, lékař, soukromá záležitost...)."""
+
+    nazev = models.CharField(_("název"), max_length=100)
+    zkratka = models.CharField(_("zkratka"), max_length=10)
+    zapocitava_se_do_pracovni_doby = models.BooleanField(
+        _("započítává se do pracovní doby"),
+        default=False,
+        help_text=_(
+            "Vypnuto (výchozí): doba pohybu se odečte z odpracované doby "
+            "(např. oběd, soukromá záležitost). Zapnuto: doba pohybu se "
+            "neodečítá, práce běží dál (např. placená přestávka)."
+        ),
+    )
+    aktivni = models.BooleanField(_("aktivní"), default=True)
+
+    class Meta:
+        verbose_name = _("typ pohybu")
+        verbose_name_plural = _("typy pohybu")
+
+    def __str__(self):
+        return f"{self.zkratka} – {self.nazev}"
+
+
+class Pohyb(models.Model):
+    """
+    Pohyb zaměstnance během probíhajícího pracovního bloku (odchod na
+    oběd, k lékaři, soukromá záležitost...). Je vnořen do WorkSession —
+    nemůže začít před jejím začátkem ani skončit po jejím konci.
+    """
+
+    work_session = models.ForeignKey(
+        WorkSession,
+        on_delete=models.CASCADE,
+        related_name="pohyby",
+        verbose_name=_("pracovní blok"),
+    )
+    typ = models.ForeignKey(
+        TypPohybu,
+        on_delete=models.PROTECT,
+        verbose_name=_("typ pohybu"),
+    )
+    zacatek = models.DateTimeField(_("začátek"))
+    konec = models.DateTimeField(_("konec"), null=True, blank=True)
+    poznamka = models.TextField(_("poznámka"), blank=True)
+    vytvoreno = models.DateTimeField(_("vytvořeno"), auto_now_add=True)
+    upraveno = models.DateTimeField(_("upraveno"), auto_now=True)
+
+    class Meta:
+        verbose_name = _("pohyb")
+        verbose_name_plural = _("pohyby")
+        ordering = ["-zacatek"]
+
+    def __str__(self):
+        konec_str = self.konec.strftime("%H:%M") if self.konec else "probíhá"
+        return (
+            f"{self.employee} | {self.typ.zkratka} | "
+            f"{self.zacatek.strftime('%d.%m.%Y %H:%M')} – {konec_str}"
+        )
+
+    @property
+    def employee(self):
+        return self.work_session.employee
+
+    @property
+    def je_aktivni(self) -> bool:
+        """Pohyb ještě probíhá — zaměstnanec se ještě nevrátil."""
+        return self.konec is None
+
+    def trvani_minut(self) -> int | None:
+        """Délka pohybu v minutách (None pokud ještě probíhá)."""
+        if not self.konec:
+            return None
+        delta = self.konec - self.zacatek
+        return int(delta.total_seconds() // 60)
+
+    def clean(self):
+        if not self.work_session_id:
+            return
+
+        if self.konec and self.zacatek and self.konec <= self.zacatek:
+            raise ValidationError(_("Konec pohybu musí být po jeho začátku."))
+
+        if self.zacatek and self.zacatek < self.work_session.zacatek:
+            raise ValidationError(
+                _("Pohyb nemůže začít před začátkem pracovního bloku.")
+            )
+
+        horni_hranice = self.work_session.konec or timezone.now()
+        if self.zacatek and self.zacatek > horni_hranice:
+            raise ValidationError(_("Pohyb nemůže začít po konci pracovního bloku."))
+        if self.konec and self.konec > horni_hranice:
+            raise ValidationError(_("Pohyb nemůže skončit po konci pracovního bloku."))
+
+        # Kontrola překryvu s ostatními pohyby ve stejném pracovním bloku
+        # (včetně právě probíhajících, kde konec is None).
+        if self.zacatek:
+            qs = Pohyb.objects.filter(work_session=self.work_session)
+            if self.pk:
+                qs = qs.exclude(pk=self.pk)
+
+            konec_filter = self.konec or timezone.now()
+            if qs.filter(
+                models.Q(konec__isnull=True) | models.Q(konec__gt=self.zacatek),
+                zacatek__lt=konec_filter,
+            ).exists():
+                raise ValidationError(
+                    _("Tento pohyb se překrývá s jiným pohybem ve stejném bloku.")
+                )
 
 
 class WorkdaySummary(models.Model):
@@ -110,7 +232,13 @@ class WorkdaySummary(models.Model):
         help_text=_("30 min odečteno při práci přes 6 hodin.")
     )
 
-    # Čistá odpracovaná doba = hrube_minuty - prestavka_minuty
+    # Součet pohybů, které se dle svého typu nezapočítávají do pracovní doby
+    pohyby_minuty = models.PositiveIntegerField(
+        _("odečtené pohyby (min)"), default=0,
+        help_text=_("Součet dokončených pohybů, jejichž typ se nezapočítává do pracovní doby.")
+    )
+
+    # Čistá odpracovaná doba = hrube_minuty - prestavka_minuty - pohyby_minuty
     odpracovane_minuty = models.PositiveIntegerField(_("odpracované minuty"), default=0)
 
     # Přesčas = odpracovane_minuty − (úvazek hodin × 60)
@@ -147,12 +275,27 @@ class WorkdaySummary(models.Model):
 
         hrube_minuty = sum(s.trvani_minut() or 0 for s in sessions)
 
+        # Pohyby, jejichž typ se nezapočítává do pracovní doby, se odečtou
+        # stejně jako povinná přestávka. Jen dokončené pohyby v už uzavřených
+        # blocích — probíhající pohyb i probíhající blok mají neznámou/ještě
+        # nezapočítanou délku, přepočet proběhne znovu při jejich uzavření.
+        # Bez podmínky na work_session__konec by pohyb v ještě otevřeném
+        # bloku odečítal čas z jiných, už uzavřených bloků téhož dne.
+        pohyby = Pohyb.objects.filter(
+            work_session__employee=employee,
+            work_session__zacatek__date=datum,
+            work_session__konec__isnull=False,
+            konec__isnull=False,
+            typ__zapocitava_se_do_pracovni_doby=False,
+        )
+        pohyby_minuty = sum(p.trvani_minut() or 0 for p in pohyby)
+
         # Povinná přestávka po 6 hodinách
         break_threshold = getattr(settings, "BREAK_THRESHOLD_HOURS", 6) * 60
         mandatory_break = getattr(settings, "MANDATORY_BREAK_MINUTES", 30)
         prestavka = mandatory_break if hrube_minuty > break_threshold else 0
 
-        odpracovane = max(hrube_minuty - prestavka, 0)
+        odpracovane = max(hrube_minuty - prestavka - pohyby_minuty, 0)
 
         # Přesčas
         uvazek_minut = int(
@@ -169,6 +312,7 @@ class WorkdaySummary(models.Model):
             defaults={
                 "hrube_minuty": hrube_minuty,
                 "prestavka_minuty": prestavka,
+                "pohyby_minuty": pohyby_minuty,
                 "odpracovane_minuty": odpracovane,
                 "prescos_minuty": prescos,
                 "je_svatek": je_svatek,
