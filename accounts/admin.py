@@ -5,6 +5,25 @@ from .models import User, Employee, Sekce, Odbor, Oddeleni, TypUvazku, HistorieP
 from .holidays_model import Zeme, StatniSvatek
 
 
+class EmployeeInline(admin.StackedInline):
+    """
+    Umožňuje založit zaměstnance rovnou na stránce uživatele (jedním
+    formulářem), místo dvoukrokového postupu „nejdřív uživatel, pak
+    zaměstnanec". Mazání zde vypnuto — smazání zaměstnance přes tento
+    inline by kaskádově smazalo i jeho docházku a žádosti o stav; k tomu
+    slouží samostatná stránka Zaměstnanci.
+    """
+
+    model = Employee
+    can_delete = False
+    max_num = 1
+    verbose_name_plural = "zaměstnanec"
+    fields = [
+        "osobni_cislo", "oddeleni", "typ_uvazku",
+        "datum_nastupu", "datum_ukonceni", "telefon", "aktivni",
+    ]
+
+
 @admin.register(User)
 class UserAdmin(BaseUserAdmin):
     list_display = ["email", "first_name", "last_name", "is_staff", "is_active"]
@@ -13,6 +32,7 @@ class UserAdmin(BaseUserAdmin):
     fieldsets = BaseUserAdmin.fieldsets + (
         (None, {"fields": []}),
     )
+    inlines = [EmployeeInline]
 
 
 @admin.register(TypUvazku)
