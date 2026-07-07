@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import WorkSession, WorkdaySummary
+from .models import WorkSession, WorkdaySummary, TypPohybu, Pohyb
 
 
 @admin.register(WorkSession)
@@ -9,6 +9,25 @@ class WorkSessionAdmin(admin.ModelAdmin):
     search_fields = ["employee__user__last_name", "employee__osobni_cislo"]
     date_hierarchy = "zacatek"
     readonly_fields = ["vytvoreno", "upraveno"]
+
+
+@admin.register(TypPohybu)
+class TypPohybuAdmin(admin.ModelAdmin):
+    list_display = ["zkratka", "nazev", "zapocitava_se_do_pracovni_doby", "aktivni"]
+    list_editable = ["aktivni"]
+
+
+@admin.register(Pohyb)
+class PohybAdmin(admin.ModelAdmin):
+    list_display = ["employee", "typ", "zacatek", "konec", "trvani_minut"]
+    list_filter = ["typ"]
+    search_fields = ["work_session__employee__user__last_name", "work_session__employee__osobni_cislo"]
+    date_hierarchy = "zacatek"
+    readonly_fields = ["vytvoreno", "upraveno"]
+
+    @admin.display(description="zaměstnanec")
+    def employee(self, obj):
+        return obj.employee
 
 
 @admin.register(WorkdaySummary)
@@ -25,7 +44,7 @@ class WorkdaySummaryAdmin(admin.ModelAdmin):
     date_hierarchy = "datum"
     search_fields = ["employee__user__last_name"]
     readonly_fields = [
-        "employee", "datum", "hrube_minuty", "prestavka_minuty",
+        "employee", "datum", "hrube_minuty", "prestavka_minuty", "pohyby_minuty",
         "odpracovane_minuty", "prescos_minuty", "je_svatek", "je_vikend",
     ]
 

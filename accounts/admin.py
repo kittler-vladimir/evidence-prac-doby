@@ -1,7 +1,12 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
+from django.core.exceptions import ValidationError
+from django.forms.models import BaseInlineFormSet
 
-from .models import User, Employee, Sekce, Odbor, Oddeleni, TypUvazku, HistoriePrislusenosti
+from .models import (
+    User, Employee, Sekce, Odbor, Oddeleni, TypUvazku, CasovyBlokUvazku,
+    HistoriePrislusenosti,
+)
 from .holidays_model import Zeme, StatniSvatek
 
 
@@ -35,10 +40,39 @@ class UserAdmin(BaseUserAdmin):
     inlines = [EmployeeInline]
 
 
+class CasovyBlokUvazkuFormSet(BaseInlineFormSet):
+    """Validuje počet bloků vůči druhu pracovní doby rodičovského typu úvazku."""
+
+    def clean(self):
+        super().clean()
+        if any(self.errors):
+            return
+
+        aktivni_bloky = [
+            form for form in self.forms
+            if form.cleaned_data and not form.cleaned_data.get("DELETE", False)
+        ]
+        if (
+            self.instance.druh_pracovni_doby == TypUvazku.DruhPracovniDoby.PRUZNA
+            and len(aktivni_bloky) > 1
+        ):
+            raise ValidationError(
+                "Pružná pracovní doba smí mít jen jeden časový blok (jádrovou dobu)."
+            )
+
+
+class CasovyBlokUvazkuInline(admin.TabularInline):
+    model = CasovyBlokUvazku
+    formset = CasovyBlokUvazkuFormSet
+    extra = 1
+
+
 @admin.register(TypUvazku)
 class TypUvazkuAdmin(admin.ModelAdmin):
-    list_display = ["nazev", "hodiny_denne", "hodiny_tyydne", "aktivni"]
+    list_display = ["nazev", "hodiny_denne", "hodiny_tyydne", "druh_pracovni_doby", "aktivni"]
+    list_filter = ["druh_pracovni_doby"]
     list_editable = ["aktivni"]
+    inlines = [CasovyBlokUvazkuInline]
 
 
 @admin.register(Sekce)

@@ -16,12 +16,40 @@
           <p class="text-muted">
             od <strong>{{ aktivni_session.zacatek|time:"H:i" }}</strong>
           </p>
-          <form method="post" action="{% url 'timetracking:clock_out' %}">
-            {% csrf_token %}
-            <button class="btn btn-danger btn-lg w-100">
-              <i class="bi bi-box-arrow-right"></i> Odchod
-            </button>
-          </form>
+
+          {% if otevreny_pohyb %}
+            <p class="text-warning mb-2">
+              <i class="bi bi-sign-turn-right-fill"></i>
+              Na pohybu: <strong>{{ otevreny_pohyb.typ.nazev }}</strong>
+              od {{ otevreny_pohyb.zacatek|time:"H:i" }}
+            </p>
+            <form method="post" action="{% url 'timetracking:return_pohyb' %}">
+              {% csrf_token %}
+              <button class="btn btn-warning btn-lg w-100">
+                <i class="bi bi-arrow-return-left"></i> Návrat z pohybu
+              </button>
+            </form>
+          {% else %}
+            <form method="post" action="{% url 'timetracking:clock_out' %}">
+              {% csrf_token %}
+              <button class="btn btn-danger btn-lg w-100">
+                <i class="bi bi-box-arrow-right"></i> Odchod
+              </button>
+            </form>
+
+            {% if typy_pohybu %}
+              <form method="post" action="{% url 'timetracking:start_pohyb' %}" class="d-flex gap-2 mt-2">
+                {% csrf_token %}
+                <select name="typ_id" class="form-select" required>
+                  <option value="">Zahájit pohyb…</option>
+                  {% for typ in typy_pohybu %}
+                    <option value="{{ typ.pk }}">{{ typ.nazev }}</option>
+                  {% endfor %}
+                </select>
+                <button class="btn btn-outline-warning">Start</button>
+              </form>
+            {% endif %}
+          {% endif %}
         {% else %}
           <div class="mb-3">
             <i class="bi bi-person-x-fill text-secondary" style="font-size:3rem"></i>
@@ -36,9 +64,12 @@
           </form>
         {% endif %}
 
-        <div class="mt-3">
+        <div class="mt-3 d-flex gap-2 justify-content-center">
           <a href="{% url 'timetracking:pridat_session' %}" class="btn btn-outline-secondary btn-sm">
             <i class="bi bi-pencil"></i> Ruční záznam
+          </a>
+          <a href="{% url 'timetracking:pridat_pohyb' %}" class="btn btn-outline-secondary btn-sm">
+            <i class="bi bi-pencil"></i> Doplnit pohyb
           </a>
         </div>
       </div>
@@ -82,6 +113,43 @@
       </div>
     </div>
   </div>
+
+  {# --- Dnešní pohyby --- #}
+  {% if dnesni_pohyby %}
+  <div class="col-12">
+    <div class="card shadow-sm">
+      <div class="card-header"><strong>Dnešní pohyby</strong></div>
+      <div class="table-responsive">
+        <table class="table table-hover mb-0">
+          <thead class="table-light">
+            <tr>
+              <th>Typ</th>
+              <th>Od</th>
+              <th>Do</th>
+              <th>Počítá se do pracovní doby</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for p in dnesni_pohyby %}
+            <tr>
+              <td>{{ p.typ.nazev }}</td>
+              <td>{{ p.zacatek|time:"H:i" }}</td>
+              <td>{{ p.konec|time:"H:i"|default:"probíhá" }}</td>
+              <td>
+                {% if p.typ.zapocitava_se_do_pracovni_doby %}
+                  <span class="badge bg-success">Ano</span>
+                {% else %}
+                  <span class="badge bg-secondary">Ne</span>
+                {% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  {% endif %}
 
   {# --- Poslední 2 týdny --- #}
   <div class="col-12">
