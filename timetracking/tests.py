@@ -1,11 +1,11 @@
-from datetime import timedelta
+from datetime import datetime, time, timedelta
 
 from django.core.exceptions import ValidationError
 from django.test import TestCase, Client
 from django.urls import reverse
 from django.utils import timezone
 
-from accounts.models import User, Employee, Sekce, Odbor, Oddeleni, TypUvazku
+from accounts.models import User, Employee, Sekce, Odbor, Oddeleni, TypUvazku, CasovyBlokUvazku
 from timetracking.models import WorkSession, WorkdaySummary, TypPohybu, Pohyb
 
 
@@ -114,6 +114,75 @@ class PohybModelTests(TestCase):
         self.assertEqual(souhrn.hrube_minuty, 60)
         self.assertEqual(souhrn.pohyby_minuty, 0)
         self.assertEqual(souhrn.odpracovane_minuty, 60)
+
+
+class PruznaPracovniDobaPohybTests(TestCase):
+    """Pohyb se 'zapocitava_se_u_pruzne_pracovni_doby' se u pružné pracovní
+    doby počítá do odpracované doby jen v jádrové (pevné) části úvazku."""
+
+    def setUp(self):
+        self.employee = vytvor_zamestnance()
+        self.employee.typ_uvazku.druh_pracovni_doby = TypUvazku.DruhPracovniDoby.PRUZNA
+        self.employee.typ_uvazku.save()
+        CasovyBlokUvazku.objects.create(
+            typ_uvazku=self.employee.typ_uvazku,
+            blok_od="09:00",
+            blok_do="14:00",
+        )
+        self.typ = TypPohybu.objects.create(
+            nazev="Placená přestávka", zkratka="PP",
+            zapocitava_se_do_pracovni_doby=True,
+            zapocitava_se_u_pruzne_pracovni_doby=True,
+        )
+        # Sestaveno přes make_aware/combine (ne .replace() na aware "now"),
+        # aby čas 07:00 byl skutečně lokální čas 07:00 a ne 07:00 UTC, které
+        # se v letním čase (UTC+2) posouvá na 09:00 lokálně a spadá do jádra.
+        zacatek = timezone.make_aware(
+            datetime.combine(timezone.localdate(), time(7, 0))
+        )
+        self.session = WorkSession.objects.create(
+            employee=self.employee, zacatek=zacatek,
+            konec=zacatek + timedelta(hours=9),
+        )
+
+    def test_pohyb_cely_uvnitr_jadra_se_neodecita(self):
+        Pohyb.objects.create(
+            work_session=self.session, typ=self.typ,
+            zacatek=self.session.zacatek + timedelta(hours=3),  # 10:00
+            konec=self.session.zacatek + timedelta(hours=3, minutes=30),  # 10:30
+        )
+        souhrn = WorkdaySummary.prepocitej(self.employee, self.session.zacatek.date())
+        self.assertEqual(souhrn.pohyby_minuty, 0)
+
+    def test_pohyb_cely_mimo_jadro_se_odecita_cely(self):
+        Pohyb.objects.create(
+            work_session=self.session, typ=self.typ,
+            zacatek=self.session.zacatek + timedelta(minutes=30),  # 07:30
+            konec=self.session.zacatek + timedelta(hours=1),  # 08:00
+        )
+        souhrn = WorkdaySummary.prepocitej(self.employee, self.session.zacatek.date())
+        self.assertEqual(souhrn.pohyby_minuty, 30)
+
+    def test_pohyb_castecne_v_jadru_se_odecita_jen_mimo_jadro(self):
+        Pohyb.objects.create(
+            work_session=self.session, typ=self.typ,
+            zacatek=self.session.zacatek + timedelta(hours=1, minutes=30),  # 08:30
+            konec=self.session.zacatek + timedelta(hours=2, minutes=30),  # 09:30
+        )
+        souhrn = WorkdaySummary.prepocitej(self.employee, self.session.zacatek.date())
+        # 08:30-09:00 mimo jádro (30 min), 09:00-09:30 v jádru (30 min).
+        self.assertEqual(souhrn.pohyby_minuty, 30)
+
+    def test_pevna_pracovni_doba_se_jadrem_neomezuje(self):
+        self.employee.typ_uvazku.druh_pracovni_doby = TypUvazku.DruhPracovniDoby.PEVNA
+        self.employee.typ_uvazku.save()
+        Pohyb.objects.create(
+            work_session=self.session, typ=self.typ,
+            zacatek=self.session.zacatek + timedelta(minutes=30),  # 07:30, mimo jádro
+            konec=self.session.zacatek + timedelta(hours=1),  # 08:00
+        )
+        souhrn = WorkdaySummary.prepocitej(self.employee, self.session.zacatek.date())
+        self.assertEqual(souhrn.pohyby_minuty, 0)
 
 
 class ClockOutBlockedByOpenPohybTests(TestCase):

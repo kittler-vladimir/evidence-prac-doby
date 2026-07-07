@@ -1,3 +1,4 @@
+from datetime import datetime
 from decimal import Decimal
 from django.db import models
 from django.utils import timezone
@@ -106,6 +107,26 @@ class TypPohybu(models.Model):
             "Vypnuto (výchozí): doba pohybu se odečte z odpracované doby "
             "(např. oběd, soukromá záležitost). Zapnuto: doba pohybu se "
             "neodečítá, práce běží dál (např. placená přestávka)."
+        ),
+    )
+    zobrazuje_se_na_pracovisti = models.BooleanField(
+        _("zobrazuje se na pracovišti"),
+        default=False,
+        help_text=_(
+            "Zapnuto: zaměstnanec je po dobu pohybu v denním přehledu "
+            "přítomnosti nadále veden jako na pracovišti (např. přestávka "
+            "v areálu). Vypnuto (výchozí): pohyb znamená nepřítomnost na "
+            "pracovišti (např. lékař, soukromá záležitost)."
+        ),
+    )
+    zapocitava_se_u_pruzne_pracovni_doby = models.BooleanField(
+        _("započítává se u pružné pracovní doby"),
+        default=False,
+        help_text=_(
+            "Zapnuto: u zaměstnanců s pružnou pracovní dobou se doba "
+            "pohybu do odpracované doby započítává jen v pevné (jádrové) "
+            "části pracovní doby (např. 9–14 hod.); mimo ni se nezapočítává. "
+            "Zatím jen evidence — logika se nikde nevynucuje."
         ),
     )
     aktivni = models.BooleanField(_("aktivní"), default=True)
@@ -235,7 +256,12 @@ class WorkdaySummary(models.Model):
     # Součet pohybů, které se dle svého typu nezapočítávají do pracovní doby
     pohyby_minuty = models.PositiveIntegerField(
         _("odečtené pohyby (min)"), default=0,
-        help_text=_("Součet dokončených pohybů, jejichž typ se nezapočítává do pracovní doby.")
+        help_text=_(
+            "Součet dokončených pohybů, jejichž typ se nezapočítává do "
+            "pracovní doby, a u pružné pracovní doby i té části pohybů "
+            "„započítávaných u pružné pracovní doby“, která leží mimo "
+            "jádrovou (pevnou) dobu úvazku."
+        )
     )
 
     # Čistá odpracovaná doba = hrube_minuty - prestavka_minuty - pohyby_minuty
@@ -266,6 +292,7 @@ class WorkdaySummary(models.Model):
         Volá se ze signálu po uložení WorkSession.
         """
         from accounts.holidays_model import StatniSvatek
+        from accounts.models import CasovyBlokUvazku, TypUvazku
 
         sessions = WorkSession.objects.filter(
             employee=employee,
@@ -281,14 +308,47 @@ class WorkdaySummary(models.Model):
         # nezapočítanou délku, přepočet proběhne znovu při jejich uzavření.
         # Bez podmínky na work_session__konec by pohyb v ještě otevřeném
         # bloku odečítal čas z jiných, už uzavřených bloků téhož dne.
-        pohyby = Pohyb.objects.filter(
+        zavrene_pohyby = Pohyb.objects.filter(
             work_session__employee=employee,
             work_session__zacatek__date=datum,
             work_session__konec__isnull=False,
             konec__isnull=False,
-            typ__zapocitava_se_do_pracovni_doby=False,
         )
-        pohyby_minuty = sum(p.trvani_minut() or 0 for p in pohyby)
+
+        pohyby_minuty = sum(
+            p.trvani_minut() or 0
+            for p in zavrene_pohyby.filter(typ__zapocitava_se_do_pracovni_doby=False)
+        )
+
+        # U pružné pracovní doby se pohyby označené „započítává se u pružné
+        # pracovní doby“ počítají do odpracované doby jen v jádrové (pevné)
+        # části úvazku — část mimo jádro se odečte stejně jako běžný pohyb.
+        je_pruzna = (
+            employee.typ_uvazku.druh_pracovni_doby
+            == TypUvazku.DruhPracovniDoby.PRUZNA
+        )
+        if je_pruzna:
+            jadro = CasovyBlokUvazku.objects.filter(
+                typ_uvazku=employee.typ_uvazku
+            ).first()
+            if jadro:
+                jadro_od = timezone.make_aware(datetime.combine(datum, jadro.blok_od))
+                jadro_do = timezone.make_aware(datetime.combine(datum, jadro.blok_do))
+
+                pruzne_pohyby = zavrene_pohyby.filter(
+                    typ__zapocitava_se_do_pracovni_doby=True,
+                    typ__zapocitava_se_u_pruzne_pracovni_doby=True,
+                )
+                for p in pruzne_pohyby:
+                    trvani = p.trvani_minut() or 0
+                    prekryv_od = max(p.zacatek, jadro_od)
+                    prekryv_do = min(p.konec, jadro_do)
+                    prekryv_minuty = (
+                        int((prekryv_do - prekryv_od).total_seconds() // 60)
+                        if prekryv_do > prekryv_od
+                        else 0
+                    )
+                    pohyby_minuty += max(trvani - prekryv_minuty, 0)
 
         # Povinná přestávka po 6 hodinách
         break_threshold = getattr(settings, "BREAK_THRESHOLD_HOURS", 6) * 60

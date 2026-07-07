@@ -13,7 +13,14 @@ class WorkSessionAdmin(admin.ModelAdmin):
 
 @admin.register(TypPohybu)
 class TypPohybuAdmin(admin.ModelAdmin):
-    list_display = ["zkratka", "nazev", "zapocitava_se_do_pracovni_doby", "aktivni"]
+    list_display = [
+        "zkratka",
+        "nazev",
+        "zapocitava_se_do_pracovni_doby",
+        "zobrazuje_se_na_pracovisti",
+        "zapocitava_se_u_pruzne_pracovni_doby",
+        "aktivni",
+    ]
     list_editable = ["aktivni"]
 
 
