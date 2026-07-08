@@ -1,0 +1,9 @@
+{% extends "admin/delete_confirmation.html" %}
+{% load i18n %}
+
+{% block delete_confirm %}
+<p class="errornote">
+    {% translate "Tato akce nevratně smaže i veškerou docházku, pohyby, žádosti o stav a zůstatky dovolené tohoto zaměstnance." %}
+</p>
+{{ block.super }}
+{% endblock %}
