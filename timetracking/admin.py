@@ -59,4 +59,16 @@ class WorkdaySummaryAdmin(admin.ModelAdmin):
         return False
 
     def has_delete_permission(self, request, obj=None):
-        return False
+        # Přímé mazání na téhle stránce zůstává zakázané (viz docstring
+        # výše). Ale při mazání zaměstnance/uživatele (kaskáda přes
+        # on_delete=CASCADE) admin před potvrzením ověřuje tohle
+        # oprávnění pro každý zasažený model — bez výjimky by to smazání
+        # zaměstnance úplně znemožnilo. Povolíme ho tedy všude kromě
+        # vlastních stránek WorkdaySummary (changelist/delete/...).
+        opts = self.model._meta
+        match = request.resolver_match
+        if match and match.url_name and match.url_name.startswith(
+            f"{opts.app_label}_{opts.model_name}_"
+        ):
+            return False
+        return super().has_delete_permission(request, obj)
