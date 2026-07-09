@@ -98,6 +98,25 @@ class EmployeeUpdateForm(forms.ModelForm):
         return employee
 
 
+class ZastupceForm(forms.ModelForm):
+    """Formulář, kterým si držitel funkce sám nastaví svého zástupce."""
+
+    class Meta:
+        model = Employee
+        fields = ["zastupce", "rucne_nepritomen"]
+
+    def __init__(self, *args, principal=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.principal = principal or self.instance
+        self.fields["zastupce"].queryset = self.principal.moznosti_zastupce()
+        self.fields["zastupce"].required = False
+        self.fields["zastupce"].label = "Zástupce"
+        self.fields["zastupce"].empty_label = "— bez zástupce —"
+        self.fields["rucne_nepritomen"].label = (
+            "Jsem aktuálně nepřítomen/á (předat schvalování zástupci)"
+        )
+
+
 class PresunutiForm(forms.Form):
     """Formulář pro přesun zaměstnance do jiného oddělení."""
     oddeleni = forms.ModelChoiceField(

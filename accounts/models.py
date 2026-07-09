@@ -1,6 +1,7 @@
 from django.contrib.auth.models import AbstractUser
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
+from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
 
@@ -196,6 +197,19 @@ class Employee(models.Model):
         VEDOUCI_ODDELENI = "VEDOUCI_ODDELENI", _("Vedoucí oddělení")
         SEKRETARIAT_ODBORU = "SEKRETARIAT_ODBORU", _("Sekretariát odboru")
 
+    # Funkce, pro které lze zvolit zástupce (má smysl jen tam, kde funkce
+    # nese CRUD práva na zaměstnance — REDITEL_SEKCE je jen read-only přehled).
+    FUNKCE_SE_ZASTUPCEM = (
+        FunkceChoices.VEDOUCI_ODDELENI,
+        FunkceChoices.REDITEL_ODBORU,
+        FunkceChoices.SEKRETARIAT_ODBORU,
+    )
+    # Funkce, které smí přesouvat zaměstnance mezi odděleními a měnit funkci ostatním.
+    FUNKCE_S_PRAVEM_PRESUN_A_ZMENA = (
+        FunkceChoices.REDITEL_ODBORU,
+        FunkceChoices.SEKRETARIAT_ODBORU,
+    )
+
     user = models.OneToOneField(
         User,
         on_delete=models.CASCADE,
@@ -226,6 +240,29 @@ class Employee(models.Model):
             "uvolní funkci předchozímu držiteli téže jednotky."
         ),
     )
+    zastupce = models.ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="zastupovani_za",
+        verbose_name=_("zástupce"),
+        help_text=_(
+            "Zástupce má trvale stejná práva na správu zaměstnanců jako "
+            "tento zaměstnanec a přebírá schvalování žádostí, pokud je "
+            "tento zaměstnanec označen jako nepřítomný. Musí být ze "
+            "stejné organizační jednotky, na kterou je vázaná funkce."
+        ),
+    )
+    rucne_nepritomen = models.BooleanField(
+        _("ručně označen jako nepřítomný"),
+        default=False,
+        help_text=_(
+            "Dočasné přepnutí mimo evidenci dovolené/nemoci (např. "
+            "služební cesta) — pokud je zapnuto, schvalování žádostí "
+            "podřízených přebírá nastavený zástupce."
+        ),
+    )
     datum_nastupu = models.DateField(_("datum nástupu"))
     datum_ukonceni = models.DateField(_("datum ukončení"), null=True, blank=True)
     telefon = models.CharField(_("telefon"), max_length=20, blank=True)
@@ -247,42 +284,64 @@ class Employee(models.Model):
     def email(self):
         return self.user.email
 
+    def _zastupuje_nekoho_s_funkci(self, funkce_set):
+        """Zastupuje trvale (Employee.zastupce) někoho, kdo drží některou z uvedených funkcí?"""
+        return Employee.objects.filter(zastupce=self, funkce__in=funkce_set).exists()
+
     @property
     def muze_spravovat_zamestnance(self):
-        """Smí zakládat/upravovat/přesouvat zaměstnance ve svém rozsahu (bez nutnosti is_staff)."""
-        return self.funkce in (
-            self.FunkceChoices.VEDOUCI_ODDELENI,
-            self.FunkceChoices.REDITEL_ODBORU,
-            self.FunkceChoices.SEKRETARIAT_ODBORU,
-        )
+        """Smí zakládat/upravovat/přesouvat zaměstnance ve svém rozsahu (vlastní funkce, nebo trvalé zastupování za ni)."""
+        if self.funkce in self.FUNKCE_SE_ZASTUPCEM:
+            return True
+        return self._zastupuje_nekoho_s_funkci(self.FUNKCE_SE_ZASTUPCEM)
 
     @property
     def muze_presouvat_zamestnance(self):
-        """Smí přesouvat zaměstnance mezi odděleními (musí spravovat víc než jedno)."""
-        return self.funkce in (
-            self.FunkceChoices.REDITEL_ODBORU,
-            self.FunkceChoices.SEKRETARIAT_ODBORU,
-        )
+        """Smí přesouvat zaměstnance mezi odděleními (musí spravovat víc než jedno — vlastní funkce, nebo zastupování)."""
+        if self.funkce in self.FUNKCE_S_PRAVEM_PRESUN_A_ZMENA:
+            return True
+        return self._zastupuje_nekoho_s_funkci(self.FUNKCE_S_PRAVEM_PRESUN_A_ZMENA)
 
     @property
     def muze_menit_funkci(self):
-        """Smí přiřazovat/měnit funkci jiným zaměstnancům (ne vedoucí oddělení)."""
-        return self.funkce in (
-            self.FunkceChoices.REDITEL_ODBORU,
-            self.FunkceChoices.SEKRETARIAT_ODBORU,
-        )
+        """Smí přiřazovat/měnit funkci jiným zaměstnancům (ne vedoucí oddělení — vlastní funkce, nebo zastupování)."""
+        if self.funkce in self.FUNKCE_S_PRAVEM_PRESUN_A_ZMENA:
+            return True
+        return self._zastupuje_nekoho_s_funkci(self.FUNKCE_S_PRAVEM_PRESUN_A_ZMENA)
+
+    @property
+    def muze_mit_zastupce(self):
+        """Má funkci, pro kterou lze zvolit zástupce (nikoliv REDITEL_SEKCE nebo bez funkce)."""
+        return self.funkce in self.FUNKCE_SE_ZASTUPCEM
 
     @property
     def je_reditel_sekce(self):
         return self.funkce == self.FunkceChoices.REDITEL_SEKCE
 
-    def spravovana_oddeleni(self):
-        """Queryset Oddeleni, mezi kterými smí zaměstnanec zakládat/přesouvat zaměstnance."""
+    def moznosti_zastupce(self):
+        """Queryset kolegů ze stejné organizační jednotky, které lze zvolit jako zástupce."""
+        if self.funkce not in self.FUNKCE_SE_ZASTUPCEM:
+            return Employee.objects.none()
+        if self.funkce == self.FunkceChoices.VEDOUCI_ODDELENI:
+            qs = Employee.objects.filter(oddeleni=self.oddeleni)
+        else:  # REDITEL_ODBORU, SEKRETARIAT_ODBORU
+            qs = Employee.objects.filter(oddeleni__odbor=self.oddeleni.odbor)
+        return qs.filter(aktivni=True).exclude(pk=self.pk)
+
+    def _vlastni_spravovana_oddeleni(self):
+        """Oddělení spravovaná na základě vlastní funkce (bez zastupování)."""
         if self.funkce == self.FunkceChoices.VEDOUCI_ODDELENI:
             return Oddeleni.objects.filter(pk=self.oddeleni_id)
         if self.funkce in (self.FunkceChoices.REDITEL_ODBORU, self.FunkceChoices.SEKRETARIAT_ODBORU):
             return Oddeleni.objects.filter(odbor=self.oddeleni.odbor)
         return Oddeleni.objects.none()
+
+    def spravovana_oddeleni(self):
+        """Queryset Oddeleni, mezi kterými smí zaměstnanec zakládat/přesouvat zaměstnance (vlastní funkce i trvalé zastupování)."""
+        ids = set(self._vlastni_spravovana_oddeleni().values_list("pk", flat=True))
+        for zastupovany in Employee.objects.filter(zastupce=self):
+            ids |= set(zastupovany._vlastni_spravovana_oddeleni().values_list("pk", flat=True))
+        return Oddeleni.objects.filter(pk__in=ids)
 
     def spravovani_zamestnanci(self):
         """Queryset zaměstnanců, které smí tento zaměstnanec spravovat (přidávat/upravovat/přesouvat)."""
@@ -308,6 +367,35 @@ class Employee(models.Model):
             return Employee.objects.filter(funkce=funkce, oddeleni__odbor__sekce=oddeleni.odbor.sekce)
         return Employee.objects.none()
 
+    def clean(self):
+        super().clean()
+        if self.zastupce_id:
+            if self.zastupce_id == self.pk:
+                raise ValidationError({"zastupce": _("Nelze zvolit sám sebe jako zástupce.")})
+            if self.funkce not in self.FUNKCE_SE_ZASTUPCEM:
+                raise ValidationError({
+                    "zastupce": _("Zástupce lze nastavit jen pro funkci s právy na správu zaměstnanců.")
+                })
+            if not self.moznosti_zastupce().filter(pk=self.zastupce_id).exists():
+                raise ValidationError({
+                    "zastupce": _("Zástupce musí být ze stejné organizační jednotky jako tato funkce.")
+                })
+
+    def je_nepritomen(self, datum=None):
+        """Je zaměstnanec k danému datu (výchozí dnes) nepřítomen pro účely předání schvalování zástupci?"""
+        if self.rucne_nepritomen:
+            return True
+        from leaves.models import ZadostOStav  # lokální import kvůli cyklické závislosti modelů
+
+        datum = datum or timezone.localdate()
+        return ZadostOStav.objects.filter(
+            employee=self,
+            stav=ZadostOStav.Stav.SCHVALENO,
+            typ__je_pritomnost=False,
+            datum_od__lte=datum,
+            datum_do__gte=datum,
+        ).exists()
+
     def save(self, *args, **kwargs):
         stary = None if self.pk is None else Employee.objects.filter(pk=self.pk).first()
         zmenilo_se_oddeleni = stary is not None and stary.oddeleni_id != self.oddeleni_id
@@ -321,6 +409,15 @@ class Employee(models.Model):
             update_fields = kwargs.get("update_fields")
             if update_fields is not None:
                 kwargs["update_fields"] = set(update_fields) | {"funkce"}
+
+        # Zástupce je vázán na funkci a jednotku, na které byl zvolen —
+        # přesun do jiného oddělení nebo změna/zrušení funkce ho stejně
+        # jako funkci samotnou zneplatní.
+        if stary is not None and self.zastupce_id and (zmenilo_se_oddeleni or stary.funkce != self.funkce):
+            self.zastupce = None
+            update_fields = kwargs.get("update_fields")
+            if update_fields is not None:
+                kwargs["update_fields"] = set(update_fields) | {"zastupce"}
 
         with transaction.atomic():
             super().save(*args, **kwargs)
@@ -338,9 +435,16 @@ class Employee(models.Model):
                 if stara_jednotka is not None:
                     type(stara_jednotka).objects.filter(pk=stara_jednotka.pk, vedouci_id=self.pk).update(vedouci=None)
 
+    def _schvalovatel_nebo_zastupce(self, kandidat):
+        """Pokud je kandidát nepřítomen a má zástupce, schvaluje místo něj zástupce."""
+        if kandidat.zastupce_id and kandidat.zastupce_id != self.pk and kandidat.je_nepritomen():
+            return kandidat.zastupce
+        return kandidat
+
     def get_schvalovatel(self):
         """
-        Vrátí přímého nadřízeného dle hierarchie:
+        Vrátí přímého nadřízeného dle hierarchie (nebo jeho zástupce,
+        je-li nadřízený aktuálně nepřítomen a zástupce má nastaveného):
         - Zaměstnanec → vedoucí oddělení
         - Vedoucí oddělení → vedoucí odboru
         - Vedoucí odboru → vedoucí sekce
@@ -348,15 +452,15 @@ class Employee(models.Model):
         """
         oddeleni = self.oddeleni
         if oddeleni.vedouci and oddeleni.vedouci != self:
-            return oddeleni.vedouci
+            return self._schvalovatel_nebo_zastupce(oddeleni.vedouci)
 
         odbor = oddeleni.odbor
         if odbor.vedouci and odbor.vedouci != self:
-            return odbor.vedouci
+            return self._schvalovatel_nebo_zastupce(odbor.vedouci)
 
         sekce = odbor.sekce
         if sekce.vedouci and sekce.vedouci != self:
-            return sekce.vedouci
+            return self._schvalovatel_nebo_zastupce(sekce.vedouci)
 
         return None  # admin musí schválit ručně
 
