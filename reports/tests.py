@@ -27,8 +27,8 @@ class PrehledPritomnostiTestCase(TestCase):
         self.zam_a = self._vytvor_zamestnance("a@example.com", "Alena", "Adamova", self.oddeleni_a, "1")
         self.zam_b = self._vytvor_zamestnance("b@example.com", "Bedrich", "Bily", self.oddeleni_b, "2")
 
-        self.oddeleni_a.vedouci = self.zam_a
-        self.oddeleni_a.save()
+        self.zam_a.funkce = Employee.FunkceChoices.VEDOUCI_ODDELENI
+        self.zam_a.save()
 
         self.typ_dovolena = TypStavu.objects.create(
             nazev="Dovolena", zkratka="DOV", odecita_ze_zustatku=True,

@@ -57,6 +57,23 @@ Sekce → Odbor → Oddeleni → Employee
 
 Each level has an optional `vedouci` (manager) FK to `Employee`. `Employee.get_schvalovatel()` walks up this chain (department head → division head → section head) to find the direct approver; if no manager is set at any level, it returns `None` and an admin must approve manually. `ZadostOStav.save()` auto-assigns `schvalovatele` from this method if not already set — but only for `typ.vyzaduje_schvaleni=True` requests; self-recorded types skip this entirely.
 
+### Employee funkce (roles) and access scoping
+
+`Employee.funkce` (a `CharField` with choices, one per employee, blank = no role) grants scoped self-service access to the employee CRUD screens in `accounts` (`seznam_zamestnancu`, `pridat_zamestnance`, `upravit_zamestnance`, `presunout_zamestnance`) without making someone a full Django admin (`is_staff`):
+
+| Funkce | CRUD scope | Can transfer between oddělení | Can appoint funkce |
+|---|---|---|---|
+| `VEDOUCI_ODDELENI` | own `Oddeleni` only | no (`muze_presouvat_zamestnance=False`) | no |
+| `REDITEL_ODBORU` / `SEKRETARIAT_ODBORU` | all `Oddeleni` in own `Odbor` | yes | yes (`muze_menit_funkci=True`) |
+| `REDITEL_SEKCE` | none — read-only `accounts:prehled_sekce` (odbory of own `Sekce` + their `REDITEL_ODBORU`/`VEDOUCI_ODDELENI` holders) | no | no |
+| *(blank)* | none | no | no |
+
+`Employee.save()` keeps `funkce` and the org-level `vedouci` FKs in sync (inside `transaction.atomic()`): assigning a unit-scoped funkce (`VEDOUCI_ODDELENI`→`Oddeleni.vedouci`, `REDITEL_ODBORU`→`Odbor.vedouci`, `REDITEL_SEKCE`→`Sekce.vedouci`) sets that FK and silently clears `funkce` on any other employee currently holding the same funkce on the same unit — at most one holder per funkce per org unit. `SEKRETARIAT_ODBORU` has no FK counterpart but still enforces the one-holder-per-`Odbor` rule. **Transferring an employee to a different `Oddeleni` clears their `funkce` entirely** (a funkce is bound to the unit it was granted on) unless the same `save()` call also sets a new funkce explicitly.
+
+`accounts.viditelni_zamestnanci(user)` and `reports.prehled_pritomnosti`/`prehled_tymu` use the same funkce-based scoping (plus `Odbor.zamestnanci_vidi_cely_odbor` for employees with no funkce) for read-only visibility — kept as one shared helper so `accounts` and `reports` access rules can't drift apart.
+
+**Known gap**: `Sekce`/`Odbor`/`Oddeleni.vedouci` remain directly editable in Django admin with no back-sync to `funkce` — setting `vedouci` there without also setting the matching employee's `funkce` leaves that manager without scoped access. Migration `accounts/0004_zpetne_dosazeni_funkce_z_vedouciho` backfilled `funkce` for `vedouci` assignments that existed before this feature, but any `vedouci` set afterward via the admin FK still needs `funkce` set to match.
+
 ### Recompute-on-save pattern
 
 `WorkdaySummary` is never written directly by views — it's derived. `timetracking/signals.py` listens for `post_save`/`post_delete` on `WorkSession` and calls `WorkdaySummary.prepocitej(employee, date)`, which recalculates gross minutes, mandatory break deduction, net worked minutes, and overtime from scratch for that employee/day. When touching worked-time logic, edit `prepocitej()`, not the views.

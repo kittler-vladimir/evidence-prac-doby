@@ -7,7 +7,7 @@ from django.shortcuts import render
 from django.utils import timezone
 from django.http import HttpResponse
 
-from accounts.models import Employee, Oddeleni
+from accounts.models import Employee, viditelni_zamestnanci
 from timetracking.models import WorkdaySummary
 from .services import NEPRITOMEN, PRITOMEN, stavy_zamestnancu
 
@@ -22,20 +22,17 @@ def je_admin_nebo_vedouci(user):
 @login_required
 def prehled_tymu(request):
     """Vedoucí vidí přehled svého týmu za aktuální měsíc."""
-    employee = request.user.employee
     dnes = timezone.localdate()
     rok = int(request.GET.get("rok", dnes.year))
     mesic = int(request.GET.get("mesic", dnes.month))
 
-    # Zaměstnanci v oddělení vedoucího
+    # Zaměstnanci ve správě přihlášeného uživatele
     if request.user.is_staff:
         podrizeni = Employee.objects.filter(aktivni=True)
+    elif hasattr(request.user, "employee") and request.user.employee.muze_spravovat_zamestnance:
+        podrizeni = request.user.employee.spravovani_zamestnanci().filter(aktivni=True)
     else:
-        oddeleni = employee.oddeleni
-        if oddeleni.vedouci == employee:
-            podrizeni = oddeleni.zamestnanci.filter(aktivni=True)
-        else:
-            podrizeni = Employee.objects.none()
+        podrizeni = Employee.objects.none()
 
     data = []
     for podr in podrizeni.select_related("user", "typ_uvazku"):
@@ -139,20 +136,7 @@ def prehled_pritomnosti(request):
     """
     datum = _parsuj_datum(request)
     ma_pristup = je_admin_nebo_vedouci(request.user)
-
-    if request.user.is_staff:
-        zamestnanci = Employee.objects.filter(aktivni=True)
-    elif hasattr(request.user, "employee"):
-        employee = request.user.employee
-        oddeleni = employee.oddeleni
-        if oddeleni.vedouci == employee:
-            zamestnanci = oddeleni.zamestnanci.filter(aktivni=True)
-        else:
-            zamestnanci = Employee.objects.filter(
-                oddeleni__odbor=oddeleni.odbor, aktivni=True
-            )
-    else:
-        zamestnanci = Employee.objects.none()
+    zamestnanci = viditelni_zamestnanci(request.user)
 
     zamestnanci = list(
         zamestnanci.select_related("user", "oddeleni").order_by(

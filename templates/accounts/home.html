@@ -56,7 +56,9 @@
       </div>
     </a>
   </div>
+  {% endif %}
 
+  {% if user.employee.muze_spravovat_zamestnance or user.is_staff %}
   <div class="col-md-4">
     <a href="{% url 'reports:prehled_tymu' %}" class="text-decoration-none">
       <div class="card shadow-sm h-100">
@@ -70,7 +72,7 @@
   </div>
   {% endif %}
 
-  {% if user.is_staff %}
+  {% if user.is_staff or user.employee.muze_spravovat_zamestnance %}
   <div class="col-md-4">
     <a href="{% url 'accounts:seznam_zamestnancu' %}" class="text-decoration-none">
       <div class="card shadow-sm h-100">
@@ -78,6 +80,20 @@
           <i class="bi bi-person-gear text-primary" style="font-size:2.5rem"></i>
           <h5 class="mt-3 mb-1">Zaměstnanci</h5>
           <p class="text-muted small mb-0">Správa zaměstnanců a organizační struktury</p>
+        </div>
+      </div>
+    </a>
+  </div>
+  {% endif %}
+
+  {% if user.employee.je_reditel_sekce %}
+  <div class="col-md-4">
+    <a href="{% url 'accounts:prehled_sekce' %}" class="text-decoration-none">
+      <div class="card shadow-sm h-100">
+        <div class="card-body text-center py-4">
+          <i class="bi bi-diagram-3 text-primary" style="font-size:2.5rem"></i>
+          <h5 class="mt-3 mb-1">Přehled sekce</h5>
+          <p class="text-muted small mb-0">Odbory a jejich vedení ve vaší sekci</p>
         </div>
       </div>
     </a>

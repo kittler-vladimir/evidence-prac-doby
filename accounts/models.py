@@ -1,6 +1,6 @@
 from django.contrib.auth.models import AbstractUser
 from django.core.exceptions import ValidationError
-from django.db import models
+from django.db import models, transaction
 from django.utils.translation import gettext_lazy as _
 
 
@@ -63,6 +63,15 @@ class Odbor(models.Model):
         blank=True,
         related_name="vedouci_odboru",
         verbose_name=_("vedoucí"),
+    )
+    zamestnanci_vidi_cely_odbor = models.BooleanField(
+        _("zaměstnanci vidí celý odbor"),
+        default=True,
+        help_text=_(
+            "Zapnuto (výchozí): řadoví zaměstnanci bez funkce vidí v přehledech "
+            "přítomnosti/týmu všechny zaměstnance odboru napříč odděleními. "
+            "Vypnuto: vidí jen zaměstnance vlastního oddělení."
+        ),
     )
     aktivni = models.BooleanField(_("aktivní"), default=True)
 
@@ -181,6 +190,12 @@ class CasovyBlokUvazku(models.Model):
 class Employee(models.Model):
     """Profil zaměstnance navázaný na User účet."""
 
+    class FunkceChoices(models.TextChoices):
+        REDITEL_SEKCE = "REDITEL_SEKCE", _("Ředitel sekce")
+        REDITEL_ODBORU = "REDITEL_ODBORU", _("Ředitel odboru")
+        VEDOUCI_ODDELENI = "VEDOUCI_ODDELENI", _("Vedoucí oddělení")
+        SEKRETARIAT_ODBORU = "SEKRETARIAT_ODBORU", _("Sekretariát odboru")
+
     user = models.OneToOneField(
         User,
         on_delete=models.CASCADE,
@@ -199,6 +214,17 @@ class Employee(models.Model):
         on_delete=models.PROTECT,
         related_name="zamestnanci",
         verbose_name=_("typ úvazku"),
+    )
+    funkce = models.CharField(
+        _("funkce"),
+        max_length=20,
+        choices=FunkceChoices.choices,
+        blank=True,
+        help_text=_(
+            "Řídící funkce v organizační hierarchii. Přiřazení automaticky "
+            "nastaví odpovídající pole 'vedoucí' na sekci/odboru/oddělení a "
+            "uvolní funkci předchozímu držiteli téže jednotky."
+        ),
     )
     datum_nastupu = models.DateField(_("datum nástupu"))
     datum_ukonceni = models.DateField(_("datum ukončení"), null=True, blank=True)
@@ -220,6 +246,97 @@ class Employee(models.Model):
     @property
     def email(self):
         return self.user.email
+
+    @property
+    def muze_spravovat_zamestnance(self):
+        """Smí zakládat/upravovat/přesouvat zaměstnance ve svém rozsahu (bez nutnosti is_staff)."""
+        return self.funkce in (
+            self.FunkceChoices.VEDOUCI_ODDELENI,
+            self.FunkceChoices.REDITEL_ODBORU,
+            self.FunkceChoices.SEKRETARIAT_ODBORU,
+        )
+
+    @property
+    def muze_presouvat_zamestnance(self):
+        """Smí přesouvat zaměstnance mezi odděleními (musí spravovat víc než jedno)."""
+        return self.funkce in (
+            self.FunkceChoices.REDITEL_ODBORU,
+            self.FunkceChoices.SEKRETARIAT_ODBORU,
+        )
+
+    @property
+    def muze_menit_funkci(self):
+        """Smí přiřazovat/měnit funkci jiným zaměstnancům (ne vedoucí oddělení)."""
+        return self.funkce in (
+            self.FunkceChoices.REDITEL_ODBORU,
+            self.FunkceChoices.SEKRETARIAT_ODBORU,
+        )
+
+    @property
+    def je_reditel_sekce(self):
+        return self.funkce == self.FunkceChoices.REDITEL_SEKCE
+
+    def spravovana_oddeleni(self):
+        """Queryset Oddeleni, mezi kterými smí zaměstnanec zakládat/přesouvat zaměstnance."""
+        if self.funkce == self.FunkceChoices.VEDOUCI_ODDELENI:
+            return Oddeleni.objects.filter(pk=self.oddeleni_id)
+        if self.funkce in (self.FunkceChoices.REDITEL_ODBORU, self.FunkceChoices.SEKRETARIAT_ODBORU):
+            return Oddeleni.objects.filter(odbor=self.oddeleni.odbor)
+        return Oddeleni.objects.none()
+
+    def spravovani_zamestnanci(self):
+        """Queryset zaměstnanců, které smí tento zaměstnanec spravovat (přidávat/upravovat/přesouvat)."""
+        return Employee.objects.filter(oddeleni__in=self.spravovana_oddeleni())
+
+    def _jednotka_pro_funkci(self, funkce, oddeleni):
+        """Organizační jednotka (Oddeleni/Odbor/Sekce), na kterou se váže daná funkce."""
+        if funkce == self.FunkceChoices.VEDOUCI_ODDELENI:
+            return oddeleni
+        if funkce == self.FunkceChoices.REDITEL_ODBORU:
+            return oddeleni.odbor
+        if funkce == self.FunkceChoices.REDITEL_SEKCE:
+            return oddeleni.odbor.sekce
+        return None  # SEKRETARIAT_ODBORU nemá pole vedoucí k synchronizaci
+
+    def _drzitele_stejne_funkce(self, funkce, oddeleni):
+        """Ostatní zaměstnanci, kteří mohou držet stejnou funkci na stejné jednotce."""
+        if funkce == self.FunkceChoices.VEDOUCI_ODDELENI:
+            return Employee.objects.filter(funkce=funkce, oddeleni=oddeleni)
+        if funkce in (self.FunkceChoices.REDITEL_ODBORU, self.FunkceChoices.SEKRETARIAT_ODBORU):
+            return Employee.objects.filter(funkce=funkce, oddeleni__odbor=oddeleni.odbor)
+        if funkce == self.FunkceChoices.REDITEL_SEKCE:
+            return Employee.objects.filter(funkce=funkce, oddeleni__odbor__sekce=oddeleni.odbor.sekce)
+        return Employee.objects.none()
+
+    def save(self, *args, **kwargs):
+        stary = None if self.pk is None else Employee.objects.filter(pk=self.pk).first()
+        zmenilo_se_oddeleni = stary is not None and stary.oddeleni_id != self.oddeleni_id
+
+        # Přesun do jiného oddělení ukončuje funkci vázanou na předchozí
+        # jednotku — nedává smysl zůstat "vedoucím oddělení", ze kterého
+        # zaměstnanec odešel. Pokud volající v témže save() zároveň
+        # explicitně nastavil jinou funkci, respektujeme ji místo mazání.
+        if zmenilo_se_oddeleni and stary.funkce and self.funkce == stary.funkce:
+            self.funkce = ""
+            update_fields = kwargs.get("update_fields")
+            if update_fields is not None:
+                kwargs["update_fields"] = set(update_fields) | {"funkce"}
+
+        with transaction.atomic():
+            super().save(*args, **kwargs)
+
+            zmenila_se_funkce = stary is None or stary.funkce != self.funkce
+
+            if self.funkce and zmenila_se_funkce:
+                self._drzitele_stejne_funkce(self.funkce, self.oddeleni).exclude(pk=self.pk).update(funkce="")
+                jednotka = self._jednotka_pro_funkci(self.funkce, self.oddeleni)
+                if jednotka is not None:
+                    type(jednotka).objects.filter(pk=jednotka.pk).update(vedouci=self)
+
+            if stary is not None and stary.funkce and stary.funkce != self.funkce:
+                stara_jednotka = self._jednotka_pro_funkci(stary.funkce, stary.oddeleni)
+                if stara_jednotka is not None:
+                    type(stara_jednotka).objects.filter(pk=stara_jednotka.pk, vedouci_id=self.pk).update(vedouci=None)
 
     def get_schvalovatel(self):
         """
@@ -278,3 +395,38 @@ class HistoriePrislusenosti(models.Model):
 
     def __str__(self):
         return f"{self.employee} → {self.oddeleni} od {self.datum_od}"
+
+
+# ---------------------------------------------------------------------------
+# Viditelnost zaměstnanců v přehledech (reports, seznam zaměstnanců)
+# ---------------------------------------------------------------------------
+
+def viditelni_zamestnanci(user):
+    """
+    Queryset aktivních zaměstnanců viditelných danému uživateli v
+    (read-only) přehledech — sdíleno mezi accounts a reports, aby se
+    pravidla viditelnosti v aplikaci časem nerozešla.
+
+    - admin (is_staff): vidí vše
+    - Vedoucí oddělení: vlastní oddělení
+    - Ředitel odboru / Sekretariát odboru: celý vlastní odbor
+    - Ředitel sekce: nemá přístup k seznamu jednotlivců (má vlastní
+      read-only přehled sekce, viz accounts:prehled_sekce)
+    - bez funkce: celý odbor, nebo jen vlastní oddělení dle
+      Odbor.zamestnanci_vidi_cely_odbor
+    """
+    if user.is_staff:
+        return Employee.objects.filter(aktivni=True)
+
+    if not hasattr(user, "employee"):
+        return Employee.objects.none()
+
+    employee = user.employee
+    if employee.muze_spravovat_zamestnance:
+        return employee.spravovani_zamestnanci().filter(aktivni=True)
+    if employee.funkce == Employee.FunkceChoices.REDITEL_SEKCE:
+        return Employee.objects.none()
+
+    if employee.oddeleni.odbor.zamestnanci_vidi_cely_odbor:
+        return Employee.objects.filter(oddeleni__odbor=employee.oddeleni.odbor, aktivni=True)
+    return Employee.objects.filter(oddeleni=employee.oddeleni, aktivni=True)

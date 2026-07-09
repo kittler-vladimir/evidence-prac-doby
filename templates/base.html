@@ -54,16 +54,25 @@
             <i class="bi bi-check2-circle"></i> Ke schválení
           </a>
         </li>
+        {% endif %}
+        {% if user.employee.muze_spravovat_zamestnance or user.is_staff %}
         <li class="nav-item">
           <a class="nav-link" href="{% url 'reports:prehled_tymu' %}">
             <i class="bi bi-people"></i> Tým
           </a>
         </li>
         {% endif %}
-        {% if user.is_staff %}
+        {% if user.is_staff or user.employee.muze_spravovat_zamestnance %}
         <li class="nav-item">
           <a class="nav-link" href="{% url 'accounts:seznam_zamestnancu' %}">
             <i class="bi bi-person-gear"></i> Zaměstnanci
+          </a>
+        </li>
+        {% endif %}
+        {% if user.employee.je_reditel_sekce %}
+        <li class="nav-item">
+          <a class="nav-link" href="{% url 'accounts:prehled_sekce' %}">
+            <i class="bi bi-diagram-3"></i> Přehled sekce
           </a>
         </li>
         {% endif %}
