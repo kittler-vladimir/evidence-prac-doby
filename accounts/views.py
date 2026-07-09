@@ -5,7 +5,7 @@ from django.contrib import messages
 from django.urls import reverse_lazy
 
 from .models import Employee, Oddeleni, Odbor, Sekce, TypUvazku
-from .forms import EmployeeCreateForm, EmployeeUpdateForm, PresunutiForm
+from .forms import EmployeeCreateForm, EmployeeUpdateForm, PresunutiForm, ZastupceForm
 
 
 # ---------------------------------------------------------------------------
@@ -58,6 +58,11 @@ def je_admin_nebo_reditel_sekce(user):
     return user.is_staff or (
         hasattr(user, "employee") and user.employee.je_reditel_sekce
     )
+
+
+def ma_zastupitelnou_funkci(user):
+    """Sebeobslužný přístup k 'Můj zástupce' — jen pro funkci, na kterou lze zvolit zástupce."""
+    return hasattr(user, "employee") and user.employee.muze_mit_zastupce
 
 
 def _rozsah_zamestnancu(user):
@@ -156,6 +161,27 @@ def presunout_zamestnance(request, pk):
 
     return render(request, "accounts/presunout.html", {
         "form": form, "employee": employee
+    })
+
+
+@login_required
+@user_passes_test(ma_zastupitelnou_funkci)
+def muj_zastupce(request):
+    """Sebeobslužné nastavení zástupce pro funkci s právy na správu zaměstnanců."""
+    employee = request.user.employee
+
+    if request.method == "POST":
+        form = ZastupceForm(request.POST, instance=employee, principal=employee)
+        if form.is_valid():
+            form.save()
+            messages.success(request, "Zástupce byl uložen.")
+            return redirect("accounts:muj_zastupce")
+    else:
+        form = ZastupceForm(instance=employee, principal=employee)
+
+    return render(request, "accounts/muj_zastupce.html", {
+        "form": form, "employee": employee,
+        "ma_moznosti_zastupce": form.fields["zastupce"].queryset.exists(),
     })
 
 

@@ -1,6 +1,7 @@
 from datetime import date, timedelta
 
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError
 from django.test import Client, TestCase
 from django.urls import reverse
 from django.utils import timezone
@@ -266,3 +267,106 @@ class FunkceScopovaneSpravaZamestnancuTests(TestCase):
         self.assertEqual(presun_get.status_code, 200)
         moznosti = {o.pk for o in presun_get.context["form"].fields["oddeleni"].queryset}
         self.assertEqual(moznosti, {self.oddeleni_it.pk, self.oddeleni_hr.pk})
+
+
+class ZastupceTests(TestCase):
+    """Issue #18 — zástupce funkce má trvale stejná CRUD práva, schvaluje jen při nepřítomnosti nadřízeného."""
+
+    def setUp(self):
+        self.sekce = Sekce.objects.create(nazev="Sekce", kod="S1")
+        self.odbor = Odbor.objects.create(sekce=self.sekce, nazev="Odbor", kod="O1")
+        self.oddeleni_it = Oddeleni.objects.create(odbor=self.odbor, nazev="IT", kod="IT")
+        self.oddeleni_hr = Oddeleni.objects.create(odbor=self.odbor, nazev="HR", kod="HR")
+        self.typ_uvazku = TypUvazku.objects.create(
+            nazev="Plný úvazek", hodiny_denne=8, hodiny_tyydne=40,
+        )
+
+        self.jana = _vytvor_zamestnance("jana@example.com", "J1", self.oddeleni_it, self.typ_uvazku)
+        self.jana.funkce = Employee.FunkceChoices.VEDOUCI_ODDELENI
+        self.jana.save()
+
+        self.petr = _vytvor_zamestnance("petr@example.com", "P1", self.oddeleni_it, self.typ_uvazku)
+        self.tomas = _vytvor_zamestnance("tomas@example.com", "T1", self.oddeleni_it, self.typ_uvazku)
+
+        self.typ_dovolena = TypStavu.objects.create(
+            nazev="Dovolená", zkratka="DOV", vyzaduje_schvaleni=True, je_pritomnost=False,
+        )
+        rok = timezone.localdate().year
+        ZustatekStavu.objects.create(
+            employee=self.jana, rok=rok, typ=self.typ_dovolena, narok_hodin=160,
+        )
+        ZustatekStavu.objects.create(
+            employee=self.tomas, rok=rok, typ=self.typ_dovolena, narok_hodin=160,
+        )
+
+    def test_moznosti_zastupce_vylucuje_sebe_a_jine_jednotky(self):
+        kolega_hr = _vytvor_zamestnance("hr@example.com", "H1", self.oddeleni_hr, self.typ_uvazku)
+        moznosti = {e.pk for e in self.jana.moznosti_zastupce()}
+        self.assertEqual(moznosti, {self.petr.pk, self.tomas.pk})
+        self.assertNotIn(kolega_hr.pk, moznosti)
+
+    def test_zastupce_musi_byt_ze_stejne_jednotky(self):
+        kolega_hr = _vytvor_zamestnance("hr2@example.com", "H2", self.oddeleni_hr, self.typ_uvazku)
+        self.jana.zastupce = kolega_hr
+        with self.assertRaises(ValidationError):
+            self.jana.full_clean()
+
+    def test_zvoleny_zastupce_ziska_trvale_crud_prava(self):
+        self.jana.zastupce = self.petr
+        self.jana.save()
+
+        self.assertTrue(self.petr.muze_spravovat_zamestnance)
+        self.assertIn(self.oddeleni_it, self.petr.spravovana_oddeleni())
+
+    def test_schvalovani_prebira_zastupce_jen_pri_nepritomnosti_nadrizeneho(self):
+        self.jana.zastupce = self.petr
+        self.jana.save()
+
+        # Jana zatím není nepřítomná -> žádost pořád schvaluje ona.
+        # Zaměstnanec se dotahuje čerstvě z DB, aby se v FK cache neprojevil
+        # stav objektu z doby před přiřazením funkce/zástupce v setUp().
+        zadost_pred = ZadostOStav.objects.create(
+            employee=Employee.objects.get(pk=self.tomas.pk), typ=self.typ_dovolena,
+            datum_od=date(2026, 8, 3), datum_do=date(2026, 8, 3),
+        )
+        self.assertEqual(zadost_pred.schvalovatele_id, self.jana.pk)
+
+        # Jana má dnes schválenou dovolenou -> nepřítomna, schvaluje zástupce.
+        dnes = timezone.localdate()
+        ZadostOStav.objects.create(
+            employee=self.jana, typ=self.typ_dovolena,
+            datum_od=dnes, datum_do=dnes, stav=ZadostOStav.Stav.SCHVALENO,
+        )
+
+        zadost_po = ZadostOStav.objects.create(
+            employee=Employee.objects.get(pk=self.tomas.pk), typ=self.typ_dovolena,
+            datum_od=dnes, datum_do=dnes,
+        )
+        self.assertEqual(zadost_po.schvalovatele_id, self.petr.pk)
+
+    def test_zastupce_z_jine_jednotky_selze_i_na_nove_zalozenem_zamestnanci(self):
+        """clean() musí validovat zastupce i na dosud neuložené instanci (self.pk is None) — např. Django admin 'Add employee'."""
+        kolega_hr = _vytvor_zamestnance("hr3@example.com", "H3", self.oddeleni_hr, self.typ_uvazku)
+        user = User.objects.create_user(
+            username="novy@example.com", email="novy@example.com", password="testpass123",
+            first_name="Novy", last_name="Zamestnanec",
+        )
+        novy = Employee(
+            user=user, osobni_cislo="N1", oddeleni=self.oddeleni_it,
+            typ_uvazku=self.typ_uvazku, datum_nastupu=date(2020, 1, 1),
+            funkce=Employee.FunkceChoices.VEDOUCI_ODDELENI,
+            zastupce=kolega_hr,
+        )
+        self.assertIsNone(novy.pk)
+        with self.assertRaises(ValidationError):
+            novy.full_clean()
+
+    def test_presun_nebo_zmena_funkce_zrusi_zastupce(self):
+        self.jana.zastupce = self.petr
+        self.jana.save()
+
+        self.jana.oddeleni = self.oddeleni_hr
+        self.jana.save(update_fields=["oddeleni"])
+
+        self.jana.refresh_from_db()
+        self.assertIsNone(self.jana.zastupce_id)
