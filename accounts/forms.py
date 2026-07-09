@@ -27,6 +27,11 @@ class EmployeeCreateForm(forms.Form):
     )
     telefon = forms.CharField(label="Telefon", max_length=20, required=False)
 
+    def __init__(self, *args, oddeleni_queryset=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        if oddeleni_queryset is not None:
+            self.fields["oddeleni"].queryset = oddeleni_queryset
+
     def clean_email(self):
         email = self.cleaned_data["email"]
         if User.objects.filter(email=email).exists():
@@ -67,18 +72,20 @@ class EmployeeUpdateForm(forms.ModelForm):
 
     class Meta:
         model = Employee
-        fields = ["osobni_cislo", "typ_uvazku", "datum_nastupu", "datum_ukonceni", "aktivni"]
+        fields = ["osobni_cislo", "typ_uvazku", "funkce", "datum_nastupu", "datum_ukonceni", "aktivni"]
         widgets = {
             "datum_nastupu": forms.DateInput(attrs={"type": "date"}, format="%Y-%m-%d"),
             "datum_ukonceni": forms.DateInput(attrs={"type": "date"}, format="%Y-%m-%d"),
         }
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, muze_menit_funkci=True, **kwargs):
         super().__init__(*args, **kwargs)
         if self.instance and self.instance.pk:
             self.fields["first_name"].initial = self.instance.user.first_name
             self.fields["last_name"].initial = self.instance.user.last_name
             self.fields["telefon"].initial = self.instance.telefon
+        if not muze_menit_funkci:
+            del self.fields["funkce"]
 
     def save(self, commit=True):
         employee = super().save(commit=False)
@@ -104,10 +111,12 @@ class PresunutiForm(forms.Form):
     )
     poznamka = forms.CharField(label="Poznámka", required=False, widget=forms.Textarea(attrs={"rows": 2}))
 
-    def __init__(self, *args, employee=None, user=None, **kwargs):
+    def __init__(self, *args, employee=None, user=None, oddeleni_queryset=None, **kwargs):
         self.employee = employee
         self.user = user
         super().__init__(*args, **kwargs)
+        if oddeleni_queryset is not None:
+            self.fields["oddeleni"].queryset = oddeleni_queryset
 
     def save(self):
         # Uzavřít stávající historii

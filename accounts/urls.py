@@ -13,4 +13,5 @@ urlpatterns = [
     path("zamestnanci/pridat/", views.pridat_zamestnance, name="pridat_zamestnance"),
     path("zamestnanci/<int:pk>/upravit/", views.upravit_zamestnance, name="upravit_zamestnance"),
     path("zamestnanci/<int:pk>/presunout/", views.presunout_zamestnance, name="presunout_zamestnance"),
+    path("zamestnanci/prehled-sekce/", views.prehled_sekce, name="prehled_sekce"),
 ]

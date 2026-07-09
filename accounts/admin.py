@@ -83,8 +83,9 @@ class SekceAdmin(admin.ModelAdmin):
 
 @admin.register(Odbor)
 class OdborAdmin(admin.ModelAdmin):
-    list_display = ["kod", "nazev", "sekce", "vedouci", "aktivni"]
+    list_display = ["kod", "nazev", "sekce", "vedouci", "zamestnanci_vidi_cely_odbor", "aktivni"]
     list_filter = ["sekce"]
+    list_editable = ["zamestnanci_vidi_cely_odbor"]
     search_fields = ["nazev", "kod"]
 
 
@@ -103,8 +104,8 @@ class HistorieInline(admin.TabularInline):
 
 @admin.register(Employee)
 class EmployeeAdmin(admin.ModelAdmin):
-    list_display = ["osobni_cislo", "jmeno", "oddeleni", "typ_uvazku", "datum_nastupu", "aktivni"]
-    list_filter = ["aktivni", "oddeleni__odbor__sekce", "typ_uvazku"]
+    list_display = ["osobni_cislo", "jmeno", "oddeleni", "funkce", "typ_uvazku", "datum_nastupu", "aktivni"]
+    list_filter = ["aktivni", "funkce", "oddeleni__odbor__sekce", "typ_uvazku"]
     search_fields = ["osobni_cislo", "user__first_name", "user__last_name", "user__email"]
     inlines = [HistorieInline]
     raw_id_fields = ["user"]
