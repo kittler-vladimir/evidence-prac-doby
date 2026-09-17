@@ -26,6 +26,56 @@ def _pk_z_get(request, nazev):
     return int(hodnota) if hodnota.isdigit() else None
 
 
+# Dotřídění podle ID kvůli neunikátnímu názvu Sekce/Odbor/Oddeleni — bez něj
+# by se při shodném názvu dvou různých jednotek jejich zaměstnanci mohli
+# proplíst a rozbít seskupování v _seskup_hierarchicky/_seskup_podle_oddeleni,
+# které předpokládá, že řádky téže jednotky jsou v seznamu vždy za sebou.
+SERAZENI_PODLE_HIERARCHIE = (
+    "oddeleni__odbor__sekce__nazev", "oddeleni__odbor__sekce_id",
+    "oddeleni__odbor__nazev", "oddeleni__odbor_id",
+    "oddeleni__nazev", "oddeleni_id",
+    "user__last_name", "user__first_name",
+)
+
+
+def _filtr_podle_hierarchie(request, zamestnanci):
+    """Pro is_staff uživatele aplikuje kaskádový sekce/odbor/oddeleni GET filtr na queryset
+    a vrátí (zúžený queryset, filtr-dict pro šablonu). Pro ostatní vrátí (queryset, None) —
+    filtr je dostupný jen adminům, ostatní vidí svůj rozsah celý."""
+    if not request.user.is_staff:
+        return zamestnanci, None
+
+    sekce_id = _pk_z_get(request, "sekce")
+    odbor_id = _pk_z_get(request, "odbor")
+    oddeleni_id = _pk_z_get(request, "oddeleni")
+
+    if oddeleni_id:
+        zamestnanci = zamestnanci.filter(oddeleni_id=oddeleni_id)
+    elif odbor_id:
+        zamestnanci = zamestnanci.filter(oddeleni__odbor_id=odbor_id)
+    elif sekce_id:
+        zamestnanci = zamestnanci.filter(oddeleni__odbor__sekce_id=sekce_id)
+
+    odbor_options = Odbor.objects.filter(aktivni=True)
+    if sekce_id:
+        odbor_options = odbor_options.filter(sekce_id=sekce_id)
+    oddeleni_options = Oddeleni.objects.filter(aktivni=True)
+    if odbor_id:
+        oddeleni_options = oddeleni_options.filter(odbor_id=odbor_id)
+    elif sekce_id:
+        oddeleni_options = oddeleni_options.filter(odbor__sekce_id=sekce_id)
+
+    filtr = {
+        "sekce_id": sekce_id,
+        "odbor_id": odbor_id,
+        "oddeleni_id": oddeleni_id,
+        "sekce_options": Sekce.objects.filter(aktivni=True),
+        "odbor_options": odbor_options,
+        "oddeleni_options": oddeleni_options,
+    }
+    return zamestnanci, filtr
+
+
 def _seskup_podle_oddeleni(radky):
     """[{'oddeleni': Oddeleni, 'radky': [...]}] v pořadí, ve kterém přišly (queryset je už seřazený)."""
     skupiny = []
@@ -71,7 +121,7 @@ def _seskup_hierarchicky(radky):
 
 @login_required
 def prehled_tymu(request):
-    """Vedoucí vidí přehled svého týmu za aktuální měsíc."""
+    """Vedoucí vidí přehled svého týmu za aktuální měsíc, seskupený podle organizační hierarchie."""
     dnes = timezone.localdate()
     rok = int(request.GET.get("rok", dnes.year))
     mesic = int(request.GET.get("mesic", dnes.month))
@@ -84,8 +134,13 @@ def prehled_tymu(request):
     else:
         podrizeni = Employee.objects.none()
 
+    podrizeni, filtr = _filtr_podle_hierarchie(request, podrizeni)
+    podrizeni = podrizeni.select_related(
+        "user", "typ_uvazku", "oddeleni__odbor__sekce"
+    ).order_by(*SERAZENI_PODLE_HIERARCHIE)
+
     data = []
-    for podr in podrizeni.select_related("user", "typ_uvazku"):
+    for podr in podrizeni:
         souhrny = WorkdaySummary.objects.filter(
             employee=podr, datum__year=rok, datum__month=mesic
         )
@@ -99,8 +154,10 @@ def prehled_tymu(request):
             "prescos_m": prescos % 60,
         })
 
+    skupiny = _seskup_hierarchicky(data) if request.user.is_staff else _seskup_podle_oddeleni(data)
+
     return render(request, "reports/prehled_tymu.html", {
-        "data": data, "rok": rok, "mesic": mesic,
+        "skupiny": skupiny, "filtr": filtr, "rok": rok, "mesic": mesic,
     })
 
 
@@ -191,48 +248,11 @@ def prehled_pritomnosti(request):
     ma_pristup = je_admin_nebo_vedouci(request.user)
     zamestnanci = viditelni_zamestnanci(request.user)
 
-    filtr = None
-    if request.user.is_staff:
-        sekce_id = _pk_z_get(request, "sekce")
-        odbor_id = _pk_z_get(request, "odbor")
-        oddeleni_id = _pk_z_get(request, "oddeleni")
-
-        if oddeleni_id:
-            zamestnanci = zamestnanci.filter(oddeleni_id=oddeleni_id)
-        elif odbor_id:
-            zamestnanci = zamestnanci.filter(oddeleni__odbor_id=odbor_id)
-        elif sekce_id:
-            zamestnanci = zamestnanci.filter(oddeleni__odbor__sekce_id=sekce_id)
-
-        odbor_options = Odbor.objects.filter(aktivni=True)
-        if sekce_id:
-            odbor_options = odbor_options.filter(sekce_id=sekce_id)
-        oddeleni_options = Oddeleni.objects.filter(aktivni=True)
-        if odbor_id:
-            oddeleni_options = oddeleni_options.filter(odbor_id=odbor_id)
-        elif sekce_id:
-            oddeleni_options = oddeleni_options.filter(odbor__sekce_id=sekce_id)
-
-        filtr = {
-            "sekce_id": sekce_id,
-            "odbor_id": odbor_id,
-            "oddeleni_id": oddeleni_id,
-            "sekce_options": Sekce.objects.filter(aktivni=True),
-            "odbor_options": odbor_options,
-            "oddeleni_options": oddeleni_options,
-        }
+    zamestnanci, filtr = _filtr_podle_hierarchie(request, zamestnanci)
 
     zamestnanci = list(
-        zamestnanci.select_related("user", "oddeleni__odbor__sekce").order_by(
-            # název u Sekce/Odbor/Oddělení není unique (na rozdíl od kódu) — bez
-            # dotřídění podle ID by se při shodném názvu dvou různých jednotek
-            # jejich zaměstnanci mohli proplíst a rozbít seskupování níž, které
-            # předpokládá, že řádky téže jednotky jsou v seznamu vždy za sebou.
-            "oddeleni__odbor__sekce__nazev", "oddeleni__odbor__sekce_id",
-            "oddeleni__odbor__nazev", "oddeleni__odbor_id",
-            "oddeleni__nazev", "oddeleni_id",
-            "user__last_name", "user__first_name",
-        )
+        zamestnanci.select_related("user", "oddeleni__odbor__sekce")
+        .order_by(*SERAZENI_PODLE_HIERARCHIE)
     )
     stavy = stavy_zamestnancu(zamestnanci, datum)
     radky = [{"employee": zam, "stav": stavy[zam.pk]} for zam in zamestnanci]
