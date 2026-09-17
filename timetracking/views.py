@@ -11,6 +11,9 @@ from .forms import WorkSessionOpravitForm, WorkSessionRucneForm, PohybRucneForm
 @login_required
 def dashboard(request):
     """Hlavní stránka — aktuální stav + dnešní souhrn."""
+    if not hasattr(request.user, "employee"):
+        messages.info(request, "Tato stránka je dostupná jen pro zaměstnance s profilem.")
+        return redirect("accounts:home")
     employee = request.user.employee
     dnes = timezone.localdate()
 
@@ -150,6 +153,9 @@ def return_pohyb(request):
 @login_required
 def prehled_mesice(request):
     """Měsíční přehled odpracované doby."""
+    if not hasattr(request.user, "employee"):
+        messages.info(request, "Tato stránka je dostupná jen pro zaměstnance s profilem.")
+        return redirect("accounts:home")
     employee = request.user.employee
     dnes = timezone.localdate()
 

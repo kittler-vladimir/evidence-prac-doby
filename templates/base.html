@@ -21,6 +21,7 @@
     </button>
     <div class="collapse navbar-collapse" id="navMenu">
       <ul class="navbar-nav me-auto">
+        {% if user.employee %}
         <li class="nav-item">
           <a class="nav-link" href="{% url 'timetracking:dashboard' %}">
             <i class="bi bi-house"></i> Přehled
@@ -36,6 +37,7 @@
             <i class="bi bi-calendar-check"></i> Žádosti a stavy
           </a>
         </li>
+        {% endif %}
         {% if user.employee or user.is_staff %}
         <li class="nav-item">
           <a class="nav-link" href="{% url 'reports:prehled_pritomnosti' %}">

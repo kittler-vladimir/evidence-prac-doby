@@ -13,6 +13,9 @@ from .forms import ZadostOStavForm, ZamitnutiForm
 @login_required
 def moje_zadosti(request):
     """Přehled vlastních žádostí a záznamů stavu."""
+    if not hasattr(request.user, "employee"):
+        messages.info(request, "Tato stránka je dostupná jen pro zaměstnance s profilem.")
+        return redirect("accounts:home")
     employee = request.user.employee
     zadosti = ZadostOStav.objects.filter(
         employee=employee
@@ -68,13 +71,14 @@ def nova_zadost(request):
 
 @login_required
 def ke_schvaleni(request):
-    """Manažer vidí žádosti čekající na jeho schválení."""
-    employee = request.user.employee
+    """Manažer vidí žádosti čekající na jeho schválení; admin (is_staff) vidí a schvaluje všechny."""
     zadosti = ZadostOStav.objects.filter(
-        schvalovatele=employee,
         stav=ZadostOStav.Stav.CEKA,
         typ__vyzaduje_schvaleni=True,
     ).select_related("employee__user", "typ")
+
+    if not request.user.is_staff:
+        zadosti = zadosti.filter(schvalovatele=request.user.employee)
 
     return render(request, "leaves/ke_schvaleni.html", {"zadosti": zadosti})
 
@@ -83,7 +87,7 @@ def ke_schvaleni(request):
 def detail_zadosti(request, pk):
     """Detail žádosti + akce schválení/zamítnutí."""
     zadost = get_object_or_404(ZadostOStav, pk=pk)
-    employee = request.user.employee
+    employee = getattr(request.user, "employee", None)
 
     # Přístup: vlastní žádost, nebo schvalovatel, nebo admin
     je_schvalovatel = zadost.schvalovatele == employee
@@ -122,7 +126,7 @@ def schvalit(request, pk):
         return redirect("leaves:ke_schvaleni")
 
     zadost = get_object_or_404(ZadostOStav, pk=pk)
-    employee = request.user.employee
+    employee = getattr(request.user, "employee", None)
 
     if zadost.schvalovatele != employee and not request.user.is_staff:
         return HttpResponseForbidden()
@@ -148,7 +152,7 @@ def zamitnou(request, pk):
         return redirect("leaves:ke_schvaleni")
 
     zadost = get_object_or_404(ZadostOStav, pk=pk)
-    employee = request.user.employee
+    employee = getattr(request.user, "employee", None)
 
     if zadost.schvalovatele != employee and not request.user.is_staff:
         return HttpResponseForbidden()
@@ -166,7 +170,7 @@ def stornovat(request, pk):
     if request.method != "POST":
         return redirect("leaves:moje_zadosti")
 
-    zadost = get_object_or_404(ZadostOStav, pk=pk, employee=request.user.employee)
+    zadost = get_object_or_404(ZadostOStav, pk=pk, employee=getattr(request.user, "employee", None))
 
     if zadost.stav != ZadostOStav.Stav.CEKA:
         messages.warning(request, "Lze stornovat pouze čekající žádost.")

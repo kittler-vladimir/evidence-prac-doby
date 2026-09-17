@@ -1,9 +1,10 @@
 from collections import Counter
 from datetime import datetime
 
+from django.contrib import messages
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.db.models import Q
-from django.shortcuts import render
+from django.shortcuts import render, redirect
 from django.utils import timezone
 from django.http import HttpResponse
 
@@ -61,6 +62,9 @@ def export_xlsx(request):
     from openpyxl.styles import Font, PatternFill, Alignment
     from calendar import monthrange
 
+    if not hasattr(request.user, "employee"):
+        messages.info(request, "Tato stránka je dostupná jen pro zaměstnance s profilem.")
+        return redirect("accounts:home")
     employee = request.user.employee
     dnes = timezone.localdate()
     rok = int(request.GET.get("rok", dnes.year))
