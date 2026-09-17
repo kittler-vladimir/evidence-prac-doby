@@ -45,6 +45,10 @@ class WorkSessionRucneForm(forms.ModelForm):
     def __init__(self, *args, employee=None, **kwargs):
         self.employee = employee
         super().__init__(*args, **kwargs)
+        # Model.clean() (viz WorkSession.clean()) čte self.employee při
+        # full_clean() uvnitř is_valid() — bez tohoto přiřazení tu instance
+        # ještě employee nemá a přístup na FK popadá RelatedObjectDoesNotExist.
+        self.instance.employee = employee
 
     def clean(self):
         cleaned = super().clean()
