@@ -8,7 +8,7 @@ from django.shortcuts import render, redirect
 from django.utils import timezone
 from django.http import HttpResponse
 
-from accounts.models import Employee, viditelni_zamestnanci
+from accounts.models import Employee, Odbor, Oddeleni, Sekce, viditelni_zamestnanci
 from timetracking.models import WorkdaySummary
 from .services import NEPRITOMEN, PRITOMEN, stavy_zamestnancu
 
@@ -18,6 +18,55 @@ LIMIT_VYSLEDKU_VYHLEDAVANI = 50
 
 def je_admin_nebo_vedouci(user):
     return user.is_staff or hasattr(user, "employee")
+
+
+def _pk_z_get(request, nazev):
+    """Vrátí platné celočíselné ID z GET parametru, jinak None (chybný/chybějící vstup = 'vše')."""
+    hodnota = request.GET.get(nazev, "")
+    return int(hodnota) if hodnota.isdigit() else None
+
+
+def _seskup_podle_oddeleni(radky):
+    """[{'oddeleni': Oddeleni, 'radky': [...]}] v pořadí, ve kterém přišly (queryset je už seřazený)."""
+    skupiny = []
+    posledni_id = None
+    for r in radky:
+        oddeleni = r["employee"].oddeleni
+        if oddeleni.pk != posledni_id:
+            skupiny.append({"oddeleni": oddeleni, "radky": []})
+            posledni_id = oddeleni.pk
+        skupiny[-1]["radky"].append(r)
+    return skupiny
+
+
+def _seskup_hierarchicky(radky):
+    """[{'sekce': Sekce, 'odbory': [{'odbor': Odbor, 'oddeleni_skupiny': [...]}]}] — stejný princip
+    jako _seskup_podle_oddeleni, jen o dvě úrovně hlouběji."""
+    sekce_skupiny = []
+    posledni_sekce_id = posledni_odbor_id = posledni_oddeleni_id = None
+    for r in radky:
+        oddeleni = r["employee"].oddeleni
+        odbor = oddeleni.odbor
+        sekce = odbor.sekce
+
+        if sekce.pk != posledni_sekce_id:
+            sekce_skupiny.append({"sekce": sekce, "odbory": []})
+            posledni_sekce_id = sekce.pk
+            posledni_odbor_id = None
+
+        if odbor.pk != posledni_odbor_id:
+            sekce_skupiny[-1]["odbory"].append({"odbor": odbor, "oddeleni_skupiny": []})
+            posledni_odbor_id = odbor.pk
+            posledni_oddeleni_id = None
+
+        aktualni_odbor = sekce_skupiny[-1]["odbory"][-1]
+        if oddeleni.pk != posledni_oddeleni_id:
+            aktualni_odbor["oddeleni_skupiny"].append({"oddeleni": oddeleni, "radky": []})
+            posledni_oddeleni_id = oddeleni.pk
+
+        aktualni_odbor["oddeleni_skupiny"][-1]["radky"].append(r)
+
+    return sekce_skupiny
 
 
 @login_required
@@ -142,9 +191,47 @@ def prehled_pritomnosti(request):
     ma_pristup = je_admin_nebo_vedouci(request.user)
     zamestnanci = viditelni_zamestnanci(request.user)
 
+    filtr = None
+    if request.user.is_staff:
+        sekce_id = _pk_z_get(request, "sekce")
+        odbor_id = _pk_z_get(request, "odbor")
+        oddeleni_id = _pk_z_get(request, "oddeleni")
+
+        if oddeleni_id:
+            zamestnanci = zamestnanci.filter(oddeleni_id=oddeleni_id)
+        elif odbor_id:
+            zamestnanci = zamestnanci.filter(oddeleni__odbor_id=odbor_id)
+        elif sekce_id:
+            zamestnanci = zamestnanci.filter(oddeleni__odbor__sekce_id=sekce_id)
+
+        odbor_options = Odbor.objects.filter(aktivni=True)
+        if sekce_id:
+            odbor_options = odbor_options.filter(sekce_id=sekce_id)
+        oddeleni_options = Oddeleni.objects.filter(aktivni=True)
+        if odbor_id:
+            oddeleni_options = oddeleni_options.filter(odbor_id=odbor_id)
+        elif sekce_id:
+            oddeleni_options = oddeleni_options.filter(odbor__sekce_id=sekce_id)
+
+        filtr = {
+            "sekce_id": sekce_id,
+            "odbor_id": odbor_id,
+            "oddeleni_id": oddeleni_id,
+            "sekce_options": Sekce.objects.filter(aktivni=True),
+            "odbor_options": odbor_options,
+            "oddeleni_options": oddeleni_options,
+        }
+
     zamestnanci = list(
-        zamestnanci.select_related("user", "oddeleni").order_by(
-            "oddeleni", "user__last_name", "user__first_name"
+        zamestnanci.select_related("user", "oddeleni__odbor__sekce").order_by(
+            # název u Sekce/Odbor/Oddělení není unique (na rozdíl od kódu) — bez
+            # dotřídění podle ID by se při shodném názvu dvou různých jednotek
+            # jejich zaměstnanci mohli proplíst a rozbít seskupování níž, které
+            # předpokládá, že řádky téže jednotky jsou v seznamu vždy za sebou.
+            "oddeleni__odbor__sekce__nazev", "oddeleni__odbor__sekce_id",
+            "oddeleni__odbor__nazev", "oddeleni__odbor_id",
+            "oddeleni__nazev", "oddeleni_id",
+            "user__last_name", "user__first_name",
         )
     )
     stavy = stavy_zamestnancu(zamestnanci, datum)
@@ -171,10 +258,13 @@ def prehled_pritomnosti(request):
         if pocitadlo[kod]
     ]
 
+    skupiny = _seskup_hierarchicky(radky) if request.user.is_staff else _seskup_podle_oddeleni(radky)
+
     return render(request, "reports/prehled_pritomnosti.html", {
         "datum": datum,
-        "radky": radky,
+        "skupiny": skupiny,
         "pocty": pocty,
+        "filtr": filtr,
         "ma_pristup": ma_pristup,
     })
 
