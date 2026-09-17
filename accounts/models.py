@@ -511,13 +511,18 @@ def viditelni_zamestnanci(user):
     (read-only) přehledech — sdíleno mezi accounts a reports, aby se
     pravidla viditelnosti v aplikaci časem nerozešla.
 
+    Toto je čistě READ scope a záměrně se neřídí CRUD rozsahem
+    (Employee.spravovani_zamestnanci) — ten je užší (Vedoucí oddělení smí
+    spravovat jen vlastní oddělení) a jeho použití zde by vedoucím
+    oddělení v přehledech schovávalo kolegy z ostatních oddělení
+    vlastního odboru, které běžný zaměstnanec bez funkce vidí.
+
     - admin (is_staff): vidí vše
-    - Vedoucí oddělení: vlastní oddělení
     - Ředitel odboru / Sekretariát odboru: celý vlastní odbor
     - Ředitel sekce: nemá přístup k seznamu jednotlivců (má vlastní
       read-only přehled sekce, viz accounts:prehled_sekce)
-    - bez funkce: celý odbor, nebo jen vlastní oddělení dle
-      Odbor.zamestnanci_vidi_cely_odbor
+    - Vedoucí oddělení i zaměstnanec bez funkce: celý odbor, nebo jen
+      vlastní oddělení dle Odbor.zamestnanci_vidi_cely_odbor
     """
     if user.is_staff:
         return Employee.objects.filter(aktivni=True)
@@ -526,8 +531,8 @@ def viditelni_zamestnanci(user):
         return Employee.objects.none()
 
     employee = user.employee
-    if employee.muze_spravovat_zamestnance:
-        return employee.spravovani_zamestnanci().filter(aktivni=True)
+    if employee.funkce in (Employee.FunkceChoices.REDITEL_ODBORU, Employee.FunkceChoices.SEKRETARIAT_ODBORU):
+        return Employee.objects.filter(oddeleni__odbor=employee.oddeleni.odbor, aktivni=True)
     if employee.funkce == Employee.FunkceChoices.REDITEL_SEKCE:
         return Employee.objects.none()
 

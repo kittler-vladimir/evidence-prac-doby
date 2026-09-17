@@ -123,21 +123,39 @@ class PrehledPritomnostiTestCase(TestCase):
         self.assertEqual(stav.popisek, "Sjezd")
         self.assertEqual(stav.barva, "#123456")
 
+    @staticmethod
+    def _videni_zamestnanci(response):
+        """Zploští non-staff `skupiny` ({'oddeleni', 'radky'}) na set ID zaměstnanců."""
+        videni = set()
+        for skupina in response.context["skupiny"]:
+            for radek in skupina["radky"]:
+                videni.add(radek["employee"].pk)
+        return videni
+
     def test_radovy_zamestnanec_vidi_cely_svuj_odbor(self):
         self._prihlas(self.zam_b, "b@example.com")
 
         response = self.client.get(reverse("reports:prehled_pritomnosti"))
         self.assertEqual(response.status_code, 200)
-        videni = {r["employee"].pk for r in response.context["radky"]}
-        self.assertEqual(videni, {self.zam_a.pk, self.zam_b.pk})
+        self.assertEqual(self._videni_zamestnanci(response), {self.zam_a.pk, self.zam_b.pk})
 
-    def test_vedouci_oddeleni_vidi_jen_sve_oddeleni(self):
+    def test_vedouci_oddeleni_vidi_cely_odbor_kdyz_je_priznak_zapnuty(self):
+        """Zapnutý Odbor.zamestnanci_vidi_cely_odbor (výchozí) platí i pro vedoucí oddělení —
+        v read-only přehledech nejsou omezeni jen na svou CRUD správu (vlastní oddělení)."""
         self._prihlas(self.zam_a, "a@example.com")
 
         response = self.client.get(reverse("reports:prehled_pritomnosti"))
         self.assertEqual(response.status_code, 200)
-        videni = {r["employee"].pk for r in response.context["radky"]}
-        self.assertEqual(videni, {self.zam_a.pk})
+        self.assertEqual(self._videni_zamestnanci(response), {self.zam_a.pk, self.zam_b.pk})
+
+    def test_vedouci_oddeleni_vidi_jen_sve_oddeleni_kdyz_je_priznak_vypnuty(self):
+        self.odbor.zamestnanci_vidi_cely_odbor = False
+        self.odbor.save()
+        self._prihlas(self.zam_a, "a@example.com")
+
+        response = self.client.get(reverse("reports:prehled_pritomnosti"))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self._videni_zamestnanci(response), {self.zam_a.pk})
 
     def test_vyhledani_najde_zamestnance_mimo_vlastni_odbor(self):
         jina_sekce = Sekce.objects.create(nazev="Jina sekce", kod="S2")
