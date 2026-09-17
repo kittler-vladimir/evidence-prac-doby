@@ -35,6 +35,9 @@ def home(request):
 
 @login_required
 def profil(request):
+    if not hasattr(request.user, "employee"):
+        messages.info(request, "Tato stránka je dostupná jen pro zaměstnance s profilem.")
+        return redirect("accounts:home")
     return render(request, "accounts/profil.html", {"employee": request.user.employee})
 
 

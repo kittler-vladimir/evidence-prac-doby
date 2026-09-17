@@ -86,8 +86,10 @@
             {{ user.get_full_name }}
           </a>
           <ul class="dropdown-menu dropdown-menu-end">
+            {% if user.employee %}
             <li><a class="dropdown-item" href="{% url 'accounts:profil' %}">Profil</a></li>
             <li><hr class="dropdown-divider"></li>
+            {% endif %}
             <li>
               <form method="post" action="{% url 'accounts:logout' %}">
                 {% csrf_token %}
