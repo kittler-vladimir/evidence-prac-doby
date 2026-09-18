@@ -121,19 +121,14 @@ def _seskup_hierarchicky(radky):
 
 @login_required
 def prehled_tymu(request):
-    """Vedoucí vidí přehled svého týmu za aktuální měsíc, seskupený podle organizační hierarchie."""
+    """Měsíční výkaz odpracovaných hodin za viditelný okruh kolegů (stejný
+    rozsah jako prehled_pritomnosti — accounts.viditelni_zamestnanci),
+    seskupený podle organizační hierarchie."""
     dnes = timezone.localdate()
     rok = int(request.GET.get("rok", dnes.year))
     mesic = int(request.GET.get("mesic", dnes.month))
 
-    # Zaměstnanci ve správě přihlášeného uživatele
-    if request.user.is_staff:
-        podrizeni = Employee.objects.filter(aktivni=True)
-    elif hasattr(request.user, "employee") and request.user.employee.muze_spravovat_zamestnance:
-        podrizeni = request.user.employee.spravovani_zamestnanci().filter(aktivni=True)
-    else:
-        podrizeni = Employee.objects.none()
-
+    podrizeni = viditelni_zamestnanci(request.user)
     podrizeni, filtr = _filtr_podle_hierarchie(request, podrizeni)
     podrizeni = podrizeni.select_related(
         "user", "typ_uvazku", "oddeleni__odbor__sekce"
