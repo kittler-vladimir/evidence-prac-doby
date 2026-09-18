@@ -157,6 +157,15 @@ class PrehledPritomnostiTestCase(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(self._videni_zamestnanci(response), {self.zam_a.pk})
 
+    def test_prehled_tymu_sdili_stejny_rozsah_jako_pritomnost(self):
+        """Issue #28 — Odbor (prehled_tymu) musí ukazovat stejný okruh lidí jako
+        Přítomnost (viditelni_zamestnanci), ne jen CRUD-spravované podřízené."""
+        self._prihlas(self.zam_b, "b@example.com")
+
+        response = self.client.get(reverse("reports:prehled_tymu"))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self._videni_zamestnanci(response), {self.zam_a.pk, self.zam_b.pk})
+
     def test_vyhledani_najde_zamestnance_mimo_vlastni_odbor(self):
         jina_sekce = Sekce.objects.create(nazev="Jina sekce", kod="S2")
         jiny_odbor = Odbor.objects.create(sekce=jina_sekce, nazev="Jiny odbor", kod="O2")

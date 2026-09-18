@@ -1,9 +1,9 @@
 {% extends "base.html" %}
-{% block title %}Přehled týmu{% endblock %}
+{% block title %}Přehled odboru{% endblock %}
 
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
-  <h4 class="mb-0"><i class="bi bi-people"></i> Přehled týmu – {{ mesic }}/{{ rok }}</h4>
+  <h4 class="mb-0"><i class="bi bi-people"></i> Přehled odboru – {{ mesic }}/{{ rok }}</h4>
   {% if filtr %}
   <form method="get" class="d-flex gap-2 flex-wrap">
     <input type="hidden" name="rok" value="{{ rok }}">
