@@ -8,10 +8,10 @@ The project is runnable locally:
 - `manage.py`, `config/wsgi.py`, `config/asgi.py` exist.
 - `venv/` holds a local virtualenv with `requirements.txt` installed (Django 5.0.6). Activate it or call `venv/Scripts/python.exe` directly.
 - `.env` exists (copied from `.env.example`) and is currently configured for **local dev with SQLite** (`DB_ENGINE=sqlite`) and console email — see below.
-- Migrations exist and are applied against `db.sqlite3`, which is kept around intentionally as dev seed data (test user `test@example.com` / `testpass123`, a test `Sekce`/`Odbor`/`Oddeleni`, a leave request, a closed work session). Don't delete it without checking with the user first.
+- Migrations exist and are applied against `db.sqlite3`, which is kept around intentionally as dev seed data (an `is_staff` test account `test@example.com`, a test `Sekce`/`Odbor`/`Oddeleni`, real org data, leave requests, work sessions). Don't delete it without checking with the user first. `test@example.com` currently has no usable password (`set_unusable_password()`) — reset it via `manage.py changepassword` or Django admin before using it to log in.
 - All templates referenced by views exist under `templates/`.
-- **Not yet a git repository.**
-- **No automated tests exist.**
+- **Is a git repository**, hosted on GitHub (`origin` remote) — work happens on feature branches with PRs (`issue-N-*` branch naming), issues tracked via `gh issue`.
+- **Automated tests exist** — run with `venv/Scripts/python.exe manage.py test`, covering `accounts`, `reports`, `leaves`, `timetracking`.
 
 ## Local dev database (SQLite vs PostgreSQL)
 
@@ -45,7 +45,7 @@ Four Django apps under `config/` (settings/urls/celery root), wired together thr
 - **`accounts`** — custom `User` (email-based login, `AUTH_USER_MODEL = "accounts.User"`), `Employee` profile, org hierarchy (`Sekce` → `Odbor` → `Oddeleni`), `TypUvazku` (contract type: hours/day, hours/week), `HistoriePrislusenosti` (department transfer history). Also owns `holidays_model.py` (`Zeme`, `StatniSvatek`, generated via the `holidays` PyPI library).
 - **`timetracking`** — `WorkSession` (one clock-in/clock-out block; overlap and end-after-start validated in `clean()`) and `WorkdaySummary` (per-employee-per-day rollup, recomputed via `WorkdaySummary.prepocitej()`).
 - **`leaves`** — `TypStavu` (employee state type — dovolená, nemoc, indispoziční volno, home office, etc.; `vyzaduje_schvaleni` picks between the two workflows below, `je_pritomnost` marks presence-type states like home office), `ZustatekStavu` (yearly hour balance, only relevant for `odecita_ze_zustatku=True` types), `ZadostOStav` (a request — for `vyzaduje_schvaleni=True` types like dovolená/indispoziční volno, goes through an approval workflow: `schval()` / `zamitni()`; for `vyzaduje_schvaleni=False` types like nemoc/OČR/služební volno/home office, `save()` self-approves immediately with no approver and no email).
-- **`reports`** — read-only views over the above: team overview (`prehled_tymu`) and XLSX export (`export_xlsx`, built with `openpyxl`).
+- **`reports`** — read-only views over the above: monthly hours overview (`prehled_tymu`, UI label "Odbor") and XLSX export (`export_xlsx`, built with `openpyxl`).
 
 URL namespaces are mounted in `config/urls.py`: `accounts` at `/`, `timetracking` at `/dochazka/`, `leaves` at `/dovolena/`, `reports` at `/reporty/`.
 
