@@ -2,7 +2,7 @@ from django import forms
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 
-from .models import Employee, Oddeleni, TypUvazku, HistoriePrislusenosti
+from .models import Employee, Funkce, Oddeleni, TypUvazku, HistoriePrislusenosti
 
 User = get_user_model()
 
@@ -86,6 +86,15 @@ class EmployeeUpdateForm(forms.ModelForm):
             self.fields["telefon"].initial = self.instance.telefon
         if not muze_menit_funkci:
             del self.fields["funkce"]
+        else:
+            # Aktuální funkce instance musí v nabídce zůstat, i když ji admin
+            # mezitím deaktivoval — jinak by neoznačená hodnota ve <select>
+            # při uložení nesouvisející změny (např. telefonu) zaměstnanci
+            # tiše přiřadila jinou funkci.
+            queryset = Funkce.objects.filter(aktivni=True)
+            if self.instance and self.instance.funkce_id:
+                queryset = queryset | Funkce.objects.filter(pk=self.instance.funkce_id)
+            self.fields["funkce"].queryset = queryset
 
     def save(self, commit=True):
         employee = super().save(commit=False)

@@ -4,7 +4,7 @@ from django.core.exceptions import ValidationError
 from django.forms.models import BaseInlineFormSet
 
 from .models import (
-    User, Employee, Sekce, Odbor, Oddeleni, TypUvazku, CasovyBlokUvazku,
+    User, Employee, Funkce, Sekce, Odbor, Oddeleni, TypUvazku, CasovyBlokUvazku,
     HistoriePrislusenosti,
 )
 from .holidays_model import Zeme, StatniSvatek
@@ -94,6 +94,51 @@ class OddeleniAdmin(admin.ModelAdmin):
     list_display = ["kod", "nazev", "odbor", "vedouci", "aktivni"]
     list_filter = ["odbor__sekce", "odbor"]
     search_fields = ["nazev", "kod"]
+
+
+@admin.register(Funkce)
+class FunkceAdmin(admin.ModelAdmin):
+    """Číselník rolí — nová role s vlastním CRUD rozsahem a vazbou na
+    organizační jednotku se dá založit čistě tady, bez zásahu do kódu.
+
+    Kód (a smazání) pěti výchozích rolí je chráněný — na jejich kódy se
+    business logika odkazuje přímo (Funkce.vychozi() apod.), přejmenování
+    nebo smazání by aplikaci rozbilo. Ostatní vlastnosti výchozích rolí
+    (příznaky, název, aktivní) editovatelné zůstávají."""
+
+    CHRANENE_KODY = {
+        Funkce.REDITEL_SEKCE, Funkce.REDITEL_ODBORU, Funkce.VEDOUCI_ODDELENI,
+        Funkce.SEKRETARIAT_ODBORU, Funkce.ZAMESTNANEC,
+    }
+
+    list_display = [
+        "kod", "nazev", "uroven_vazby", "synchronizuje_vedouciho",
+        "muze_spravovat_zamestnance", "muze_presouvat_zamestnance",
+        "muze_menit_funkci", "muze_mit_zastupce", "bez_seznamu_zamestnancu", "aktivni",
+    ]
+    list_filter = ["uroven_vazby", "aktivni"]
+    list_editable = [
+        "synchronizuje_vedouciho", "muze_spravovat_zamestnance",
+        "muze_presouvat_zamestnance", "muze_menit_funkci", "muze_mit_zastupce",
+        "bez_seznamu_zamestnancu", "aktivni",
+    ]
+    search_fields = ["nazev", "kod"]
+
+    def get_readonly_fields(self, request, obj=None):
+        if obj is not None and obj.kod in self.CHRANENE_KODY:
+            return ["kod"]
+        return []
+
+    def has_delete_permission(self, request, obj=None):
+        if obj is not None and obj.kod in self.CHRANENE_KODY:
+            return False
+        return super().has_delete_permission(request, obj)
+
+    def delete_queryset(self, request, queryset):
+        # Hromadná akce "Delete selected" jde přes queryset, ne přes
+        # has_delete_permission(obj=...) — chráněné kódy je proto potřeba
+        # z hromadného mazání vyloučit i tady.
+        super().delete_queryset(request, queryset.exclude(kod__in=self.CHRANENE_KODY))
 
 
 class HistorieInline(admin.TabularInline):

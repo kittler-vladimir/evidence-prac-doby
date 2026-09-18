@@ -185,30 +185,111 @@ class CasovyBlokUvazku(models.Model):
 
 
 # ---------------------------------------------------------------------------
+# Funkce (role) — číselník nahrazující dřívější hardcoded enum
+# ---------------------------------------------------------------------------
+
+class Funkce(models.Model):
+    """
+    Číselník organizačních rolí. Nahrazuje dřívější `Employee.FunkceChoices`
+    (hardcoded Python enum) — nová role s vlastním CRUD rozsahem, vazbou na
+    organizační jednotku a právem na zástupce se dá přidat čistě přes admin,
+    bez zásahu do kódu.
+
+    Kódy pěti výchozích rolí (REDITEL_SEKCE, REDITEL_ODBORU, VEDOUCI_ODDELENI,
+    SEKRETARIAT_ODBORU, ZAMESTNANEC — viz konstanty níže) mají v business
+    logice zvláštní význam jen skrz `ZAMESTNANEC`, na který se funkce
+    zaměstnance vrací při zrušení role (viz `Funkce.vychozi()`); ostatní
+    role jsou vůči kódu jinak "hloupé" — chování řídí jen jejich příznaky.
+    """
+
+    class UrovenVazby(models.TextChoices):
+        ZADNA = "ZADNA", _("Žádná")
+        ODDELENI = "ODDELENI", _("Oddělení")
+        ODBOR = "ODBOR", _("Odbor")
+        SEKCE = "SEKCE", _("Sekce")
+
+    REDITEL_SEKCE = "REDITEL_SEKCE"
+    REDITEL_ODBORU = "REDITEL_ODBORU"
+    VEDOUCI_ODDELENI = "VEDOUCI_ODDELENI"
+    SEKRETARIAT_ODBORU = "SEKRETARIAT_ODBORU"
+    ZAMESTNANEC = "ZAMESTNANEC"
+
+    kod = models.SlugField(_("kód"), max_length=30, unique=True)
+    nazev = models.CharField(_("název"), max_length=100)
+    uroven_vazby = models.CharField(
+        _("úroveň vazby"),
+        max_length=10,
+        choices=UrovenVazby.choices,
+        default=UrovenVazby.ZADNA,
+        help_text=_(
+            "Organizační úroveň, na kterou je funkce vázaná — řídí rozsah "
+            "pravidla 'nejvýše jeden držitel funkce na jednotku' a rozsah "
+            "výběru zástupce/spravovaných oddělení. 'Žádná' = bez vazby "
+            "(např. Zaměstnanec)."
+        ),
+    )
+    synchronizuje_vedouciho = models.BooleanField(
+        _("synchronizuje pole vedoucí"),
+        default=False,
+        help_text=_(
+            "Zapnuto: přiřazení funkce automaticky nastaví pole 'vedoucí' "
+            "na organizační jednotce dané úrovní vazby (a při zrušení funkce "
+            "ho zase uvolní). Vypnuto: funkce nese CRUD práva na dané "
+            "úrovni, ale nereprezentuje jednotku navenek jako její vedoucí "
+            "(např. Sekretariát odboru)."
+        ),
+    )
+    muze_spravovat_zamestnance = models.BooleanField(
+        _("smí spravovat zaměstnance"), default=False,
+        help_text=_("Smí zakládat/upravovat/přesouvat zaměstnance v rozsahu dle úrovně vazby."),
+    )
+    muze_presouvat_zamestnance = models.BooleanField(
+        _("smí přesouvat zaměstnance"), default=False,
+        help_text=_("Smí přesouvat zaměstnance mezi odděleními v rámci svého rozsahu."),
+    )
+    muze_menit_funkci = models.BooleanField(
+        _("smí měnit funkci"), default=False,
+        help_text=_("Smí přiřazovat/měnit funkci jiným zaměstnancům v rámci svého rozsahu."),
+    )
+    muze_mit_zastupce = models.BooleanField(
+        _("smí mít zástupce"), default=False,
+        help_text=_("Držitel funkce si může zvolit trvalého zástupce ze stejné organizační jednotky."),
+    )
+    bez_seznamu_zamestnancu = models.BooleanField(
+        _("bez seznamu zaměstnanců"), default=False,
+        help_text=_(
+            "Zapnuto: bez přístupu k seznamu jednotlivých zaměstnanců "
+            "(accounts.viditelni_zamestnanci vrátí prázdný queryset) — "
+            "u funkce vázané na úroveň Sekce má místo toho zaměstnanec "
+            "vlastní souhrnný přehled sekce (accounts:prehled_sekce)."
+        ),
+    )
+    aktivni = models.BooleanField(_("aktivní"), default=True)
+
+    class Meta:
+        verbose_name = _("funkce")
+        verbose_name_plural = _("funkce")
+        ordering = ["nazev"]
+
+    def __str__(self):
+        return self.nazev
+
+    @classmethod
+    def vychozi(cls):
+        """Výchozí funkce zaměstnance bez vyšší role (nahrazuje dřívější blank funkce)."""
+        return cls.objects.get(kod=cls.ZAMESTNANEC)
+
+
+def _vychozi_funkce_id():
+    return Funkce.vychozi().pk
+
+
+# ---------------------------------------------------------------------------
 # Zaměstnanec
 # ---------------------------------------------------------------------------
 
 class Employee(models.Model):
     """Profil zaměstnance navázaný na User účet."""
-
-    class FunkceChoices(models.TextChoices):
-        REDITEL_SEKCE = "REDITEL_SEKCE", _("Ředitel sekce")
-        REDITEL_ODBORU = "REDITEL_ODBORU", _("Ředitel odboru")
-        VEDOUCI_ODDELENI = "VEDOUCI_ODDELENI", _("Vedoucí oddělení")
-        SEKRETARIAT_ODBORU = "SEKRETARIAT_ODBORU", _("Sekretariát odboru")
-
-    # Funkce, pro které lze zvolit zástupce (má smysl jen tam, kde funkce
-    # nese CRUD práva na zaměstnance — REDITEL_SEKCE je jen read-only přehled).
-    FUNKCE_SE_ZASTUPCEM = (
-        FunkceChoices.VEDOUCI_ODDELENI,
-        FunkceChoices.REDITEL_ODBORU,
-        FunkceChoices.SEKRETARIAT_ODBORU,
-    )
-    # Funkce, které smí přesouvat zaměstnance mezi odděleními a měnit funkci ostatním.
-    FUNKCE_S_PRAVEM_PRESUN_A_ZMENA = (
-        FunkceChoices.REDITEL_ODBORU,
-        FunkceChoices.SEKRETARIAT_ODBORU,
-    )
 
     user = models.OneToOneField(
         User,
@@ -229,15 +310,17 @@ class Employee(models.Model):
         related_name="zamestnanci",
         verbose_name=_("typ úvazku"),
     )
-    funkce = models.CharField(
-        _("funkce"),
-        max_length=20,
-        choices=FunkceChoices.choices,
-        blank=True,
+    funkce = models.ForeignKey(
+        Funkce,
+        on_delete=models.PROTECT,
+        default=_vychozi_funkce_id,
+        related_name="zamestnanci",
+        verbose_name=_("funkce"),
         help_text=_(
-            "Řídící funkce v organizační hierarchii. Přiřazení automaticky "
-            "nastaví odpovídající pole 'vedoucí' na sekci/odboru/oddělení a "
-            "uvolní funkci předchozímu držiteli téže jednotky."
+            "Role v organizační hierarchii. U funkcí se zapnutým "
+            "'synchronizuje vedoucího' přiřazení automaticky nastaví "
+            "odpovídající pole 'vedoucí' na sekci/odboru/oddělení a uvolní "
+            "funkci předchozímu držiteli téže jednotky."
         ),
     )
     zastupce = models.ForeignKey(
@@ -284,56 +367,75 @@ class Employee(models.Model):
     def email(self):
         return self.user.email
 
-    def _zastupuje_nekoho_s_funkci(self, funkce_set):
-        """Zastupuje trvale (Employee.zastupce) někoho, kdo drží některou z uvedených funkcí?"""
-        return Employee.objects.filter(zastupce=self, funkce__in=funkce_set).exists()
+    def _zastupuje_nekoho_s_pravem(self, nazev_prava):
+        """Zastupuje trvale (Employee.zastupce) někoho, jehož funkce nese dané oprávnění (název příznaku na Funkce)?"""
+        return Employee.objects.filter(zastupce=self, **{f"funkce__{nazev_prava}": True}).exists()
+
+    def _ma_pravo(self, nazev_prava):
+        """Nese vlastní funkce dané oprávnění (název příznaku na Funkce), nebo ho zastupuje za někoho, kdo ho má?"""
+        if self.funkce_id and getattr(self.funkce, nazev_prava):
+            return True
+        return self._zastupuje_nekoho_s_pravem(nazev_prava)
 
     @property
     def muze_spravovat_zamestnance(self):
         """Smí zakládat/upravovat/přesouvat zaměstnance ve svém rozsahu (vlastní funkce, nebo trvalé zastupování za ni)."""
-        if self.funkce in self.FUNKCE_SE_ZASTUPCEM:
-            return True
-        return self._zastupuje_nekoho_s_funkci(self.FUNKCE_SE_ZASTUPCEM)
+        return self._ma_pravo("muze_spravovat_zamestnance")
 
     @property
     def muze_presouvat_zamestnance(self):
-        """Smí přesouvat zaměstnance mezi odděleními (musí spravovat víc než jedno — vlastní funkce, nebo zastupování)."""
-        if self.funkce in self.FUNKCE_S_PRAVEM_PRESUN_A_ZMENA:
-            return True
-        return self._zastupuje_nekoho_s_funkci(self.FUNKCE_S_PRAVEM_PRESUN_A_ZMENA)
+        """Smí přesouvat zaměstnance mezi odděleními (vlastní funkce, nebo zastupování)."""
+        return self._ma_pravo("muze_presouvat_zamestnance")
 
     @property
     def muze_menit_funkci(self):
-        """Smí přiřazovat/měnit funkci jiným zaměstnancům (ne vedoucí oddělení — vlastní funkce, nebo zastupování)."""
-        if self.funkce in self.FUNKCE_S_PRAVEM_PRESUN_A_ZMENA:
-            return True
-        return self._zastupuje_nekoho_s_funkci(self.FUNKCE_S_PRAVEM_PRESUN_A_ZMENA)
+        """Smí přiřazovat/měnit funkci jiným zaměstnancům (vlastní funkce, nebo zastupování)."""
+        return self._ma_pravo("muze_menit_funkci")
 
     @property
     def muze_mit_zastupce(self):
-        """Má funkci, pro kterou lze zvolit zástupce (nikoliv REDITEL_SEKCE nebo bez funkce)."""
-        return self.funkce in self.FUNKCE_SE_ZASTUPCEM
+        """Má funkci, pro kterou lze zvolit zástupce."""
+        return bool(self.funkce_id and self.funkce.muze_mit_zastupce)
 
     @property
     def je_reditel_sekce(self):
-        return self.funkce == self.FunkceChoices.REDITEL_SEKCE
+        """Má přístup k accounts:prehled_sekce (read-only přehled celé vlastní sekce).
+
+        Vázáno i na uroven_vazby == SEKCE (ne jen na bez_seznamu_zamestnancu) —
+        jinak by budoucí admin-přidaná funkce s bez_seznamu_zamestnancu=True na
+        nižší úrovni (myšlená jen jako 'skryj ze seznamu zaměstnanců') omylem
+        získala i přístup k přehledu celé sekce.
+        """
+        return bool(
+            self.funkce_id
+            and self.funkce.bez_seznamu_zamestnancu
+            and self.funkce.uroven_vazby == Funkce.UrovenVazby.SEKCE
+        )
 
     def moznosti_zastupce(self):
         """Queryset kolegů ze stejné organizační jednotky, které lze zvolit jako zástupce."""
-        if self.funkce not in self.FUNKCE_SE_ZASTUPCEM:
+        if not self.muze_mit_zastupce:
             return Employee.objects.none()
-        if self.funkce == self.FunkceChoices.VEDOUCI_ODDELENI:
+        uroven = self.funkce.uroven_vazby
+        if uroven == Funkce.UrovenVazby.ODDELENI:
             qs = Employee.objects.filter(oddeleni=self.oddeleni)
-        else:  # REDITEL_ODBORU, SEKRETARIAT_ODBORU
+        elif uroven == Funkce.UrovenVazby.SEKCE:
+            qs = Employee.objects.filter(oddeleni__odbor__sekce=self.oddeleni.odbor.sekce)
+        else:  # ODBOR (a záložně ZADNA, i když s muze_mit_zastupce=True by nastat neměla)
             qs = Employee.objects.filter(oddeleni__odbor=self.oddeleni.odbor)
         return qs.filter(aktivni=True).exclude(pk=self.pk)
 
     def _vlastni_spravovana_oddeleni(self):
         """Oddělení spravovaná na základě vlastní funkce (bez zastupování)."""
-        if self.funkce == self.FunkceChoices.VEDOUCI_ODDELENI:
+        if not (self.funkce_id and self.funkce.muze_spravovat_zamestnance):
+            return Oddeleni.objects.none()
+        uroven = self.funkce.uroven_vazby
+        if uroven == Funkce.UrovenVazby.ODDELENI:
             return Oddeleni.objects.filter(pk=self.oddeleni_id)
-        if self.funkce in (self.FunkceChoices.REDITEL_ODBORU, self.FunkceChoices.SEKRETARIAT_ODBORU):
+        if uroven == Funkce.UrovenVazby.ODBOR:
             return Oddeleni.objects.filter(odbor=self.oddeleni.odbor)
+        if uroven == Funkce.UrovenVazby.SEKCE:
+            return Oddeleni.objects.filter(odbor__sekce=self.oddeleni.odbor.sekce)
         return Oddeleni.objects.none()
 
     def spravovana_oddeleni(self):
@@ -348,31 +450,35 @@ class Employee(models.Model):
         return Employee.objects.filter(oddeleni__in=self.spravovana_oddeleni())
 
     def _jednotka_pro_funkci(self, funkce, oddeleni):
-        """Organizační jednotka (Oddeleni/Odbor/Sekce), na kterou se váže daná funkce."""
-        if funkce == self.FunkceChoices.VEDOUCI_ODDELENI:
+        """Organizační jednotka (Oddeleni/Odbor/Sekce), do jejíhož pole 'vedoucí' se má daná funkce zapsat."""
+        if funkce is None or not funkce.synchronizuje_vedouciho:
+            return None  # např. Sekretariát odboru nemá pole vedoucí k synchronizaci
+        if funkce.uroven_vazby == Funkce.UrovenVazby.ODDELENI:
             return oddeleni
-        if funkce == self.FunkceChoices.REDITEL_ODBORU:
+        if funkce.uroven_vazby == Funkce.UrovenVazby.ODBOR:
             return oddeleni.odbor
-        if funkce == self.FunkceChoices.REDITEL_SEKCE:
+        if funkce.uroven_vazby == Funkce.UrovenVazby.SEKCE:
             return oddeleni.odbor.sekce
-        return None  # SEKRETARIAT_ODBORU nemá pole vedoucí k synchronizaci
+        return None
 
     def _drzitele_stejne_funkce(self, funkce, oddeleni):
-        """Ostatní zaměstnanci, kteří mohou držet stejnou funkci na stejné jednotce."""
-        if funkce == self.FunkceChoices.VEDOUCI_ODDELENI:
+        """Ostatní zaměstnanci, kteří mohou držet stejnou funkci na stejné jednotce (dle úrovně vazby funkce)."""
+        if funkce is None:
+            return Employee.objects.none()
+        if funkce.uroven_vazby == Funkce.UrovenVazby.ODDELENI:
             return Employee.objects.filter(funkce=funkce, oddeleni=oddeleni)
-        if funkce in (self.FunkceChoices.REDITEL_ODBORU, self.FunkceChoices.SEKRETARIAT_ODBORU):
+        if funkce.uroven_vazby == Funkce.UrovenVazby.ODBOR:
             return Employee.objects.filter(funkce=funkce, oddeleni__odbor=oddeleni.odbor)
-        if funkce == self.FunkceChoices.REDITEL_SEKCE:
+        if funkce.uroven_vazby == Funkce.UrovenVazby.SEKCE:
             return Employee.objects.filter(funkce=funkce, oddeleni__odbor__sekce=oddeleni.odbor.sekce)
-        return Employee.objects.none()
+        return Employee.objects.none()  # ZADNA — např. Zaměstnanec, bez dedup pravidla
 
     def clean(self):
         super().clean()
         if self.zastupce_id:
             if self.zastupce_id == self.pk:
                 raise ValidationError({"zastupce": _("Nelze zvolit sám sebe jako zástupce.")})
-            if self.funkce not in self.FUNKCE_SE_ZASTUPCEM:
+            if not self.muze_mit_zastupce:
                 raise ValidationError({
                     "zastupce": _("Zástupce lze nastavit jen pro funkci s právy na správu zaměstnanců.")
                 })
@@ -399,13 +505,18 @@ class Employee(models.Model):
     def save(self, *args, **kwargs):
         stary = None if self.pk is None else Employee.objects.filter(pk=self.pk).first()
         zmenilo_se_oddeleni = stary is not None and stary.oddeleni_id != self.oddeleni_id
+        vychozi_funkce = None  # Funkce.vychozi() se dotáhne líně a nejvýš jednou za save()
 
         # Přesun do jiného oddělení ukončuje funkci vázanou na předchozí
         # jednotku — nedává smysl zůstat "vedoucím oddělení", ze kterého
         # zaměstnanec odešel. Pokud volající v témže save() zároveň
         # explicitně nastavil jinou funkci, respektujeme ji místo mazání.
-        if zmenilo_se_oddeleni and stary.funkce and self.funkce == stary.funkce:
-            self.funkce = ""
+        if (
+            zmenilo_se_oddeleni and stary.funkce_id == self.funkce_id
+            and stary.funkce.kod != Funkce.ZAMESTNANEC
+        ):
+            vychozi_funkce = Funkce.vychozi()
+            self.funkce = vychozi_funkce
             update_fields = kwargs.get("update_fields")
             if update_fields is not None:
                 kwargs["update_fields"] = set(update_fields) | {"funkce"}
@@ -413,7 +524,7 @@ class Employee(models.Model):
         # Zástupce je vázán na funkci a jednotku, na které byl zvolen —
         # přesun do jiného oddělení nebo změna/zrušení funkce ho stejně
         # jako funkci samotnou zneplatní.
-        if stary is not None and self.zastupce_id and (zmenilo_se_oddeleni or stary.funkce != self.funkce):
+        if stary is not None and self.zastupce_id and (zmenilo_se_oddeleni or stary.funkce_id != self.funkce_id):
             self.zastupce = None
             update_fields = kwargs.get("update_fields")
             if update_fields is not None:
@@ -422,15 +533,22 @@ class Employee(models.Model):
         with transaction.atomic():
             super().save(*args, **kwargs)
 
-            zmenila_se_funkce = stary is None or stary.funkce != self.funkce
+            zmenila_se_funkce = stary is None or stary.funkce_id != self.funkce_id
 
-            if self.funkce and zmenila_se_funkce:
-                self._drzitele_stejne_funkce(self.funkce, self.oddeleni).exclude(pk=self.pk).update(funkce="")
+            # _drzitele_stejne_funkce/_jednotka_pro_funkci jsou pro ZAMESTNANEC
+            # (uroven_vazby=ZADNA, synchronizuje_vedouciho=False) přirozeně
+            # no-op — žádné zvláštní větvení pro "bez role" tu není potřeba.
+            if self.funkce_id and zmenila_se_funkce:
+                if vychozi_funkce is None:
+                    vychozi_funkce = Funkce.vychozi()
+                self._drzitele_stejne_funkce(self.funkce, self.oddeleni).exclude(pk=self.pk).update(
+                    funkce=vychozi_funkce
+                )
                 jednotka = self._jednotka_pro_funkci(self.funkce, self.oddeleni)
                 if jednotka is not None:
                     type(jednotka).objects.filter(pk=jednotka.pk).update(vedouci=self)
 
-            if stary is not None and stary.funkce and stary.funkce != self.funkce:
+            if stary is not None and stary.funkce_id and stary.funkce_id != self.funkce_id:
                 stara_jednotka = self._jednotka_pro_funkci(stary.funkce, stary.oddeleni)
                 if stara_jednotka is not None:
                     type(stara_jednotka).objects.filter(pk=stara_jednotka.pk, vedouci_id=self.pk).update(vedouci=None)
@@ -517,12 +635,17 @@ def viditelni_zamestnanci(user):
     oddělení v přehledech schovávalo kolegy z ostatních oddělení
     vlastního odboru, které běžný zaměstnanec bez funkce vidí.
 
+    Odvozeno z Funkce.bez_seznamu_zamestnancu a Funkce.uroven_vazby dané
+    funkce zaměstnance (ne z CRUD příznaků):
     - admin (is_staff): vidí vše
-    - Ředitel odboru / Sekretariát odboru: celý vlastní odbor
-    - Ředitel sekce: nemá přístup k seznamu jednotlivců (má vlastní
-      read-only přehled sekce, viz accounts:prehled_sekce)
-    - Vedoucí oddělení i zaměstnanec bez funkce: celý odbor, nebo jen
-      vlastní oddělení dle Odbor.zamestnanci_vidi_cely_odbor
+    - funkce s bez_seznamu_zamestnancu (např. Ředitel sekce): nemá přístup k
+      seznamu jednotlivců (má vlastní read-only přehled, viz
+      accounts:prehled_sekce)
+    - funkce vázaná na úroveň Odbor/Sekce (např. Ředitel odboru,
+      Sekretariát odboru): celý vlastní odbor / sekce
+    - funkce vázaná na úroveň Oddělení nebo bez vazby (Vedoucí oddělení i
+      Zaměstnanec): celý odbor, nebo jen vlastní oddělení dle
+      Odbor.zamestnanci_vidi_cely_odbor
     """
     if user.is_staff:
         return Employee.objects.filter(aktivni=True)
@@ -531,10 +654,15 @@ def viditelni_zamestnanci(user):
         return Employee.objects.none()
 
     employee = user.employee
-    if employee.funkce in (Employee.FunkceChoices.REDITEL_ODBORU, Employee.FunkceChoices.SEKRETARIAT_ODBORU):
-        return Employee.objects.filter(oddeleni__odbor=employee.oddeleni.odbor, aktivni=True)
-    if employee.funkce == Employee.FunkceChoices.REDITEL_SEKCE:
+    funkce = employee.funkce
+
+    if funkce.bez_seznamu_zamestnancu:
         return Employee.objects.none()
+
+    if funkce.uroven_vazby == Funkce.UrovenVazby.SEKCE:
+        return Employee.objects.filter(oddeleni__odbor__sekce=employee.oddeleni.odbor.sekce, aktivni=True)
+    if funkce.uroven_vazby == Funkce.UrovenVazby.ODBOR:
+        return Employee.objects.filter(oddeleni__odbor=employee.oddeleni.odbor, aktivni=True)
 
     if employee.oddeleni.odbor.zamestnanci_vidi_cely_odbor:
         return Employee.objects.filter(oddeleni__odbor=employee.oddeleni.odbor, aktivni=True)
