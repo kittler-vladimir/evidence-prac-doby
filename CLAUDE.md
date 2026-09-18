@@ -59,18 +59,29 @@ Each level has an optional `vedouci` (manager) FK to `Employee`. `Employee.get_s
 
 ### Employee funkce (roles) and access scoping
 
-`Employee.funkce` (a `CharField` with choices, one per employee, blank = no role) grants scoped self-service access to the employee CRUD screens in `accounts` (`seznam_zamestnancu`, `pridat_zamestnance`, `upravit_zamestnance`, `presunout_zamestnance`) without making someone a full Django admin (`is_staff`):
+`Employee.funkce` is a `ForeignKey` to the `accounts.Funkce` číselník (not a hardcoded enum) — every employee always has a funkce, defaulting to `ZAMESTNANEC` ("Zaměstnanec", the rank-and-file role with no elevated rights; replaces the old blank/no-role state). A new role — with its own CRUD scope, org-unit binding, and deputy rules — can be added by an admin through Django admin (`FunkceAdmin`), without a code deploy. `Funkce` fields:
 
-| Funkce | CRUD scope | Can transfer between oddělení | Can appoint funkce |
-|---|---|---|---|
-| `VEDOUCI_ODDELENI` | own `Oddeleni` only | no (`muze_presouvat_zamestnance=False`) | no |
-| `REDITEL_ODBORU` / `SEKRETARIAT_ODBORU` | all `Oddeleni` in own `Odbor` | yes | yes (`muze_menit_funkci=True`) |
-| `REDITEL_SEKCE` | none — read-only `accounts:prehled_sekce` (odbory of own `Sekce` + their `REDITEL_ODBORU`/`VEDOUCI_ODDELENI` holders) | no | no |
-| *(blank)* | none | no | no |
+- `uroven_vazby` (`ZADNA`/`ODDELENI`/`ODBOR`/`SEKCE`) — the org level this funkce is scoped/deduped at (drives `Employee.spravovana_oddeleni()`, `moznosti_zastupce()`, and the "at most one holder per funkce per org unit" rule)
+- `synchronizuje_vedouciho` — whether assigning this funkce writes the employee into the matching `Sekce`/`Odbor`/`Oddeleni.vedouci` FK (see below)
+- `muze_spravovat_zamestnance` / `muze_presouvat_zamestnance` / `muze_menit_funkci` / `muze_mit_zastupce` / `bez_seznamu_zamestnancu` — the permission flags, read directly off the related `Funkce` row by `Employee`'s `muze_*` properties instead of hardcoded Python tuples
 
-`Employee.save()` keeps `funkce` and the org-level `vedouci` FKs in sync (inside `transaction.atomic()`): assigning a unit-scoped funkce (`VEDOUCI_ODDELENI`→`Oddeleni.vedouci`, `REDITEL_ODBORU`→`Odbor.vedouci`, `REDITEL_SEKCE`→`Sekce.vedouci`) sets that FK and silently clears `funkce` on any other employee currently holding the same funkce on the same unit — at most one holder per funkce per org unit. `SEKRETARIAT_ODBORU` has no FK counterpart but still enforces the one-holder-per-`Odbor` rule. **Transferring an employee to a different `Oddeleni` clears their `funkce` entirely** (a funkce is bound to the unit it was granted on) unless the same `save()` call also sets a new funkce explicitly.
+The 5 seeded rows reproduce the pre-refactor hardcoded behavior 1:1, and grant scoped self-service access to the employee CRUD screens in `accounts` (`seznam_zamestnancu`, `pridat_zamestnance`, `upravit_zamestnance`, `presunout_zamestnance`) without making someone a full Django admin (`is_staff`):
 
-`accounts.viditelni_zamestnanci(user)` and `reports.prehled_pritomnosti`/`prehled_tymu` use the same funkce-based scoping (plus `Odbor.zamestnanci_vidi_cely_odbor` for employees with no funkce) for read-only visibility — kept as one shared helper so `accounts` and `reports` access rules can't drift apart.
+| Funkce | `uroven_vazby` | `synchronizuje_vedouciho` | CRUD scope | Can transfer between oddělení | Can appoint funkce |
+|---|---|---|---|---|---|
+| `VEDOUCI_ODDELENI` | `ODDELENI` | yes | own `Oddeleni` only | no (`muze_presouvat_zamestnance=False`) | no |
+| `REDITEL_ODBORU` | `ODBOR` | yes | all `Oddeleni` in own `Odbor` | yes (`muze_menit_funkci=True`) | yes |
+| `SEKRETARIAT_ODBORU` | `ODBOR` | **no** | all `Oddeleni` in own `Odbor` | yes | yes |
+| `REDITEL_SEKCE` | `SEKCE` | yes | none — read-only `accounts:prehled_sekce` (odbory of own `Sekce` + their `REDITEL_ODBORU`/`VEDOUCI_ODDELENI` holders); `bez_seznamu_zamestnancu=True` | no | no |
+| `ZAMESTNANEC` | `ZADNA` | no | none | no | no |
+
+`Employee.save()` keeps `funkce` and the org-level `vedouci` FKs in sync (inside `transaction.atomic()`): assigning a `synchronizuje_vedouciho=True` funkce sets the `vedouci` FK at the level given by `uroven_vazby` (`ODDELENI`→`Oddeleni.vedouci`, `ODBOR`→`Odbor.vedouci`, `SEKCE`→`Sekce.vedouci`) and silently resets `funkce` back to `ZAMESTNANEC` on any other employee currently holding the same funkce on the same unit — at most one holder per funkce per org unit, scoped by `uroven_vazby` regardless of the sync flag (so `SEKRETARIAT_ODBORU`, with `synchronizuje_vedouciho=False`, still enforces one-holder-per-`Odbor` without ever touching `Odbor.vedouci`). **Transferring an employee to a different `Oddeleni` resets their `funkce` to `ZAMESTNANEC`** (a funkce is bound to the unit it was granted on) unless the same `save()` call also sets a new funkce explicitly.
+
+`accounts.viditelni_zamestnanci(user)` derives read-only visibility from the same `Funkce` row (`bez_seznamu_zamestnancu` → no individual list; `uroven_vazby` in `ODBOR`/`SEKCE` → whole odbor/sekce; `ODDELENI`/`ZADNA` → whole odbor or just own `Oddeleni` per `Odbor.zamestnanci_vidi_cely_odbor`) — kept as one shared helper so `accounts` and `reports.prehled_pritomnosti` access rules can't drift apart. **Note**: `reports.prehled_tymu` does *not* actually share this scoping (it uses `Employee.spravovani_zamestnanci()`, the narrower CRUD scope, directly) — tracked as a separate drift in [issue #24](https://github.com/kittler-vladimir/evidence-prac-doby/issues/24).
+
+`Employee.je_reditel_sekce` (gates `accounts:prehled_sekce`) additionally requires `uroven_vazby == SEKCE`, not just `bez_seznamu_zamestnancu` — otherwise a future admin-added funkce meant only to hide a lower-level role from the individual employee list would also, as a side effect, unlock the whole-`Sekce` overview.
+
+`FunkceAdmin` protects the 5 seeded rows' `kod` (read-only once created, undeletable, including from the bulk "delete selected" action) since business logic (`Funkce.vychozi()` and others) resolves specific roles by `kod` — renaming or deleting one of these would crash employee creation/transfer app-wide. Everything else about a seeded row (flags, `nazev`, `aktivni`) stays editable, and admin-added custom roles have no such restriction.
 
 **Known gap**: `Sekce`/`Odbor`/`Oddeleni.vedouci` remain directly editable in Django admin with no back-sync to `funkce` — setting `vedouci` there without also setting the matching employee's `funkce` leaves that manager without scoped access. Migration `accounts/0004_zpetne_dosazeni_funkce_z_vedouciho` backfilled `funkce` for `vedouci` assignments that existed before this feature, but any `vedouci` set afterward via the admin FK still needs `funkce` set to match.
 

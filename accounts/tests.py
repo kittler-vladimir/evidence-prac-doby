@@ -7,12 +7,16 @@ from django.urls import reverse
 from django.utils import timezone
 
 from accounts.models import (
-    Employee, HistoriePrislusenosti, Oddeleni, Odbor, Sekce, TypUvazku,
+    Employee, Funkce, HistoriePrislusenosti, Oddeleni, Odbor, Sekce, TypUvazku,
 )
 from leaves.models import TypStavu, ZadostOStav, ZustatekStavu
 from timetracking.models import WorkSession, WorkdaySummary
 
 User = get_user_model()
+
+
+def _funkce(kod):
+    return Funkce.objects.get(kod=kod)
 
 
 def _vytvor_zamestnance(email, osobni_cislo, oddeleni, typ_uvazku):
@@ -137,20 +141,20 @@ class FunkceSynchronizaceTests(TestCase):
         self.d = _vytvor_zamestnance("d@example.com", "D1", self.oddeleni_a, self.typ_uvazku)
 
     def test_prirazeni_funkce_nastavi_vedouciho_a_nahradi_predchoziho_drzitele(self):
-        self.a.funkce = Employee.FunkceChoices.VEDOUCI_ODDELENI
+        self.a.funkce = _funkce(Funkce.VEDOUCI_ODDELENI)
         self.a.save()
         self.oddeleni_a.refresh_from_db()
         self.assertEqual(self.oddeleni_a.vedouci_id, self.a.pk)
 
-        self.d.funkce = Employee.FunkceChoices.VEDOUCI_ODDELENI
+        self.d.funkce = _funkce(Funkce.VEDOUCI_ODDELENI)
         self.d.save()
         self.oddeleni_a.refresh_from_db()
         self.a.refresh_from_db()
         self.assertEqual(self.oddeleni_a.vedouci_id, self.d.pk)
-        self.assertEqual(self.a.funkce, "")
+        self.assertEqual(self.a.funkce, Funkce.vychozi())
 
     def test_presun_zamestnance_vymaze_funkci_a_stareho_vedouciho(self):
-        self.a.funkce = Employee.FunkceChoices.VEDOUCI_ODDELENI
+        self.a.funkce = _funkce(Funkce.VEDOUCI_ODDELENI)
         self.a.save()
 
         self.a.oddeleni = self.oddeleni_b
@@ -158,21 +162,21 @@ class FunkceSynchronizaceTests(TestCase):
 
         self.a.refresh_from_db()
         self.oddeleni_a.refresh_from_db()
-        self.assertEqual(self.a.funkce, "")
+        self.assertEqual(self.a.funkce, Funkce.vychozi())
         self.assertIsNone(self.oddeleni_a.vedouci_id)
 
     def test_soucasna_zmena_oddeleni_a_funkce_se_neprepise(self):
         """Přesun + rovnou přiřazení nové funkce v jednom save() se nesmí ztratit."""
-        self.a.funkce = Employee.FunkceChoices.VEDOUCI_ODDELENI
+        self.a.funkce = _funkce(Funkce.VEDOUCI_ODDELENI)
         self.a.save()
 
         self.a.oddeleni = self.oddeleni_b
-        self.a.funkce = Employee.FunkceChoices.REDITEL_ODBORU
+        self.a.funkce = _funkce(Funkce.REDITEL_ODBORU)
         self.a.save()
 
         self.a.refresh_from_db()
         self.odbor.refresh_from_db()
-        self.assertEqual(self.a.funkce, Employee.FunkceChoices.REDITEL_ODBORU)
+        self.assertEqual(self.a.funkce, _funkce(Funkce.REDITEL_ODBORU))
         self.assertEqual(self.odbor.vedouci_id, self.a.pk)
 
 
@@ -190,7 +194,7 @@ class FunkceScopovaneSpravaZamestnancuTests(TestCase):
         )
 
         self.a = _vytvor_zamestnance("vedouci-a@example.com", "A1", self.oddeleni_it, typ_uvazku)
-        self.a.funkce = Employee.FunkceChoices.VEDOUCI_ODDELENI
+        self.a.funkce = _funkce(Funkce.VEDOUCI_ODDELENI)
         self.a.save()
 
         self.b = _vytvor_zamestnance("b@example.com", "B1", self.oddeleni_it, typ_uvazku)
@@ -223,7 +227,7 @@ class FunkceScopovaneSpravaZamestnancuTests(TestCase):
             "reditel@example.com", "R1", self.oddeleni_it,
             self.a.typ_uvazku,
         )
-        reditel.funkce = Employee.FunkceChoices.REDITEL_SEKCE
+        reditel.funkce = _funkce(Funkce.REDITEL_SEKCE)
         reditel.save()
         client = Client()
         client.force_login(reditel.user)
@@ -258,7 +262,7 @@ class FunkceScopovaneSpravaZamestnancuTests(TestCase):
         reditel = _vytvor_zamestnance(
             "reditel-o@example.com", "RO1", self.oddeleni_it, self.a.typ_uvazku,
         )
-        reditel.funkce = Employee.FunkceChoices.REDITEL_ODBORU
+        reditel.funkce = _funkce(Funkce.REDITEL_ODBORU)
         reditel.save()
         client = Client()
         client.force_login(reditel.user)
@@ -282,7 +286,7 @@ class ZastupceTests(TestCase):
         )
 
         self.jana = _vytvor_zamestnance("jana@example.com", "J1", self.oddeleni_it, self.typ_uvazku)
-        self.jana.funkce = Employee.FunkceChoices.VEDOUCI_ODDELENI
+        self.jana.funkce = _funkce(Funkce.VEDOUCI_ODDELENI)
         self.jana.save()
 
         self.petr = _vytvor_zamestnance("petr@example.com", "P1", self.oddeleni_it, self.typ_uvazku)
@@ -354,7 +358,7 @@ class ZastupceTests(TestCase):
         novy = Employee(
             user=user, osobni_cislo="N1", oddeleni=self.oddeleni_it,
             typ_uvazku=self.typ_uvazku, datum_nastupu=date(2020, 1, 1),
-            funkce=Employee.FunkceChoices.VEDOUCI_ODDELENI,
+            funkce=_funkce(Funkce.VEDOUCI_ODDELENI),
             zastupce=kolega_hr,
         )
         self.assertIsNone(novy.pk)

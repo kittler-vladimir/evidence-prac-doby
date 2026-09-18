@@ -6,7 +6,7 @@ from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 
-from accounts.models import Employee, Oddeleni, Odbor, Sekce, TypUvazku
+from accounts.models import Employee, Funkce, Oddeleni, Odbor, Sekce, TypUvazku
 from leaves.models import TypStavu, ZadostOStav
 from timetracking.models import WorkSession
 from reports.services import NEPRITOMEN, PRITOMEN, stav_zamestnance
@@ -27,7 +27,7 @@ class PrehledPritomnostiTestCase(TestCase):
         self.zam_a = self._vytvor_zamestnance("a@example.com", "Alena", "Adamova", self.oddeleni_a, "1")
         self.zam_b = self._vytvor_zamestnance("b@example.com", "Bedrich", "Bily", self.oddeleni_b, "2")
 
-        self.zam_a.funkce = Employee.FunkceChoices.VEDOUCI_ODDELENI
+        self.zam_a.funkce = Funkce.objects.get(kod=Funkce.VEDOUCI_ODDELENI)
         self.zam_a.save()
 
         self.typ_dovolena = TypStavu.objects.create(
