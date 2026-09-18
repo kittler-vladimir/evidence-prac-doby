@@ -1,19 +1,19 @@
 ## Description
-Applies the same organizational-hierarchy grouping and cascading filter that was added to the daily presence overview (#20/#21) to the monthly team overview (`reports:prehled_tymu`, "Tým" in the nav). This is a display-only change — who is included in the team overview is unchanged.
+`Employee.funkce` was a hardcoded `CharField` enum (`FunkceChoices` + two Python permission tuples). This replaces it with a proper `Funkce` reference table (`ForeignKey`) whose CRUD scope, org-unit binding, and deputy-rights are data-driven flags — a new role can be added by an admin through Django admin, without a code deploy. Adds an explicit `ZAMESTNANEC` ("Zaměstnanec") role replacing the old implicit blank/no-role state, so every employee always has a funkce.
 
 ## Changes
-- `reports/views.py`: `prehled_tymu` now groups results by `Sekce → Odbor → Oddělení` (admin) or by `Oddělení` (scoped manager), reusing the existing `_seskup_hierarchicky`/`_seskup_podle_oddeleni` helpers. Admin (`is_staff`) gets the same optional cascading `sekce`/`odbor`/`oddeleni` filter as `prehled_pritomnosti`. The filter-building logic and hierarchy `order_by` were extracted into shared `_filtr_podle_hierarchie()` / `SERAZENI_PODLE_HIERARCHIE`, now reused by both `prehled_tymu` and `prehled_pritomnosti`, removing ~50 lines of duplicated code flagged in review.
-- `templates/reports/prehled_tymu.html`: flat table replaced with nested group cards (mirroring `prehled_pritomnosti.html`'s markup) plus the filter form; month/year (`rok`/`mesic`) is preserved across filter changes via hidden inputs.
+- `accounts/models.py`: new `Funkce` model (`uroven_vazby`, `synchronizuje_vedouciho`, and the 5 permission flags); `Employee.funkce` is now a `ForeignKey`; `viditelni_zamestnanci()`, `spravovana_oddeleni()`, `moznosti_zastupce()`, `_jednotka_pro_funkci()`, `_drzitele_stejne_funkce()`, `Employee.save()`'s vedouci-sync, and the `muze_*` properties all read from the related `Funkce` row instead of hardcoded Python tuples
+- `accounts/migrations/0006_funkce.py`, `0007_employee_funkce_fk.py`: creates `Funkce`, seeds 5 rows reproducing the prior hardcoded behavior 1:1, and backfills every existing `Employee` (blank → `ZAMESTNANEC`, else by matching code) via a safe add-column → backfill → drop → rename → tighten sequence
+- `accounts/admin.py`: new `FunkceAdmin` (číselník pattern); protects the 5 seeded rows' `kod` from rename/delete (including bulk delete) since business logic resolves them by code
+- `accounts/forms.py`: `EmployeeUpdateForm`'s funkce dropdown always includes the employee's own current funkce even if since deactivated, so submitting an unrelated form change can't silently reassign their role
+- `accounts/tests.py`, `reports/tests.py`: updated to the new FK-based model
+- `CLAUDE.md`: rewrote the "Employee funkce (roles) and access scoping" section for the new data-driven model
 
 ## How to test
-1. Log in as `test@example.com` / `testpass123` (`is_staff`) → open "Tým" → see the full `Sekce → Odbor → Oddělení` tree with 3 cascading filter selects; selecting a `Sekce` narrows the view and the `Odbor`/`Oddělení` options.
-2. Log in as a single-`Oddělení` manager (`VEDOUCI_ODDELENI`) → see exactly one group for their `Oddělení`, no filter controls.
-3. Log in as a multi-`Oddělení` manager (`REDITEL_ODBORU`/`SEKRETARIAT_ODBORU`) → see one group per managed `Oddělení`, no `Sekce`/`Odbor` headers, no filter.
-4. Log in as an employee with no management scope → see "Žádní podřízení zaměstnanci."
-
-Verified via `manage.py check`, browser screenshots (admin tree + filter), and Django test-client `force_login` across all the above roles — no change in who is included, only in grouping/display.
+1. `python manage.py test` — 54/54 pass
+2. `python manage.py migrate` against the existing dev `db.sqlite3` seed data — verified the backfill maps every employee correctly and `Employee.objects.filter(funkce__isnull=True, aktivni=True).count() == 0`
+3. In Django admin → Funkce, confirm you can add a brand-new role (e.g. a department-level "Auditor") and it becomes selectable on an employee's edit form immediately
+4. Confirm the 5 seeded roles' `kod` field is read-only and undeletable in admin, while other fields (flags, `nazev`, `aktivni`) stay editable
 
 ## Issue
-Closes #22
-
-🤖 Generated with [Claude Code](https://claude.com/claude-code)
+Closes #26
