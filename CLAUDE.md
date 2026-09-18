@@ -11,7 +11,7 @@ The project is runnable locally:
 - Migrations exist and are applied against `db.sqlite3`, which is kept around intentionally as dev seed data (an `is_staff` test account `test@example.com`, a test `Sekce`/`Odbor`/`Oddeleni`, real org data, leave requests, work sessions). Don't delete it without checking with the user first. `test@example.com` currently has no usable password (`set_unusable_password()`) — reset it via `manage.py changepassword` or Django admin before using it to log in.
 - All templates referenced by views exist under `templates/`.
 - **Is a git repository**, hosted on GitHub (`origin` remote) — work happens on feature branches with PRs (`issue-N-*` branch naming), issues tracked via `gh issue`.
-- **Automated tests exist** — run with `venv/Scripts/python.exe manage.py test`, covering `accounts`, `reports`, `leaves`, `timetracking`.
+- **Automated tests exist** — run with `venv/Scripts/python.exe manage.py test`, covering `accounts`, `reports`, `leaves`, `timetracking`. A GitHub Actions workflow (`.github/workflows/tests.yml`) runs the same suite (sqlite, dummy env vars — no secrets needed) on every push to `main` and every PR.
 
 ## Local dev database (SQLite vs PostgreSQL)
 
