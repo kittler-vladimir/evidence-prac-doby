@@ -1,12 +1,14 @@
 ## Description
-The repo had no custom CI — only GitHub's own "Codespaces Prebuilds" workflow, which prebuilds a devcontainer image on every push and has nothing to do with code correctness (it doesn't run tests, doesn't gate PRs). This adds a real GitHub Actions workflow that runs the Django test suite on every PR and every push to `main`.
+On the daily presence overview, the legend counts at the top ("Přítomen: 1", "Dovolená: 2", "Nepřítomen: 5", ...) were all rendered as neutral grey badges, while the same states are colored per employee row. The legend now uses the same badge class and color as the row badges, so absence states are recognizable at a glance.
 
 ## Changes
-- `.github/workflows/tests.yml`: new workflow — Python 3.10 (matches the local `venv`), `pip install -r requirements.txt`, `manage.py makemigrations --check --dry-run`, then `manage.py test`. Uses `DB_ENGINE=sqlite` and dummy values for the other required settings (`SECRET_KEY`, email, Celery) supplied as workflow `env:` vars — no `.env` file or secrets needed since none of those services are actually exercised by the test suite.
+- `reports/views.py`: `prehled_pritomnosti` now passes the full `StavZamestnance` (label, `badge_trida`, `barva`) in each `pocty` entry instead of just a label and count; category ordering (first occurrence, Přítomen first, Nepřítomen last) is unchanged.
+- `templates/reports/prehled_pritomnosti.html`: legend badge uses `{{ p.stav.badge_trida }}` / `p.stav.barva`, the same markup as the row badges.
+- `reports/tests.py`: regression test asserting the legend state carries the type's color and that the colored badge renders in both the legend and the employee row.
 
 ## How to test
-1. Verified locally by exporting the exact same env vars the workflow sets and running `manage.py makemigrations --check --dry-run` + `manage.py test` — both pass (55/55 tests)
-2. Once this PR is open, its own GitHub Actions run is the real end-to-end proof
+1. `python manage.py test` — 56/56 pass (CI runs the same)
+2. Open the daily presence overview on a day with an approved absence (e.g. dovolená or home office) — the legend badge for that state has the same color as the badge next to the employee
 
 ## Issue
-None — ad hoc infra request.
+None — small visual fix.
