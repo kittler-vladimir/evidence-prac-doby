@@ -43,9 +43,9 @@ A dev-server launch config exists at `.claude/launch.json` (`django-dev-server`,
 Four Django apps under `config/` (settings/urls/celery root), wired together through `accounts.Employee`:
 
 - **`accounts`** — custom `User` (email-based login, `AUTH_USER_MODEL = "accounts.User"`), `Employee` profile, org hierarchy (`Sekce` → `Odbor` → `Oddeleni`), `TypUvazku` (contract type: hours/day, hours/week), `HistoriePrislusenosti` (department transfer history). Also owns `holidays_model.py` (`Zeme`, `StatniSvatek`, generated via the `holidays` PyPI library).
-- **`timetracking`** — `WorkSession` (one clock-in/clock-out block; overlap and end-after-start validated in `clean()`) and `WorkdaySummary` (per-employee-per-day rollup, recomputed via `WorkdaySummary.prepocitej()`).
-- **`leaves`** — `TypStavu` (employee state type — dovolená, nemoc, indispoziční volno, home office, etc.; `vyzaduje_schvaleni` picks between the two workflows below, `je_pritomnost` marks presence-type states like home office), `ZustatekStavu` (yearly hour balance, only relevant for `odecita_ze_zustatku=True` types), `ZadostOStav` (a request — for `vyzaduje_schvaleni=True` types like dovolená/indispoziční volno, goes through an approval workflow: `schval()` / `zamitni()`; for `vyzaduje_schvaleni=False` types like nemoc/OČR/služební volno/home office, `save()` self-approves immediately with no approver and no email).
-- **`reports`** — read-only views over the above: monthly hours overview (`prehled_tymu`, UI label "Odbor") and XLSX export (`export_xlsx`, built with `openpyxl`).
+- **`timetracking`** — `WorkSession` (one clock-in/clock-out block; overlap and end-after-start validated in `clean()`), `TypPohybu` + `Pohyb` (a movement nested inside a `WorkSession` — lunch, doctor, business trip, private errand; see "Pohyby" below) and `WorkdaySummary` (per-employee-per-day rollup, recomputed via `WorkdaySummary.prepocitej()`).
+- **`leaves`** — `TypStavu` (employee state type — dovolená, nemoc, indispoziční volno, home office, etc.; `vyzaduje_schvaleni` picks between the two workflows below, `je_pritomnost` marks presence-type states like home office), `ZustatekStavu` (yearly hour balance, only relevant for `odecita_ze_zustatku=True` types), `NarokDovolene` / `NarokIndispozicnihoVolna` (global yearly entitlements in hours with a `platne_od` date, editable in admin — see the entitlements row in "Business rules"), `ZadostOStav` (a request — for `vyzaduje_schvaleni=True` types like dovolená/indispoziční volno, goes through an approval workflow: `schval()` / `zamitni()`; for `vyzaduje_schvaleni=False` types like nemoc/OČR/služební volno/home office, `save()` self-approves immediately with no approver and no email).
+- **`reports`** — read-only views over the above: daily presence overview (`prehled_pritomnosti`, UI "Přítomnost"), monthly hours overview (`prehled_tymu`, UI label "Odbor"), company-wide employee search (`vyhledat_zamestnance` — deliberately not limited to the viewer's odbor) and XLSX export (`export_xlsx`, built with `openpyxl`). The daily overview derives each employee's state in `reports/services.py::stavy_zamestnancu` with this priority: approved presence-type record (`TypStavu.je_pritomnost`, e.g. home office) > Přítomen (open `WorkSession` today, any `WorkSession` on other dates) > approved absence record > Nepřítomen. The count legend at the top uses the same badge class/color as the per-employee badges.
 
 URL namespaces are mounted in `config/urls.py`: `accounts` at `/`, `timetracking` at `/dochazka/`, `leaves` at `/dovolena/`, `reports` at `/reporty/`.
 
@@ -56,6 +56,8 @@ Sekce → Odbor → Oddeleni → Employee
 ```
 
 Each level has an optional `vedouci` (manager) FK to `Employee`. `Employee.get_schvalovatel()` walks up this chain (department head → division head → section head) to find the direct approver; if no manager is set at any level, it returns `None` and an admin must approve manually. `ZadostOStav.save()` auto-assigns `schvalovatele` from this method if not already set — but only for `typ.vyzaduje_schvaleni=True` requests; self-recorded types skip this entirely.
+
+**Deputy (`Employee.zastupce`)**: a holder of a funkce with `muze_mit_zastupce` picks a permanent deputy from the same org unit on `accounts:muj_zastupce`. The deputy (a) permanently gets the same CRUD rights as the holder — `Employee._ma_pravo()` / `spravovana_oddeleni()` union the deputy's own funkce with everyone they deputize for — and (b) takes over approvals while the holder is absent: `get_schvalovatel()` returns the deputy when the approver `je_nepritomen()` (`rucne_nepritomen=True`, or an approved non-presence absence covering today). The approver is resolved **once, when the request is created** (`ZadostOStav.save()`), so a request already waiting on someone stays with them even if they become absent later. `Employee.save()` clears `zastupce` when the holder transfers to another `Oddeleni` or their funkce changes.
 
 ### Employee funkce (roles) and access scoping
 
@@ -89,13 +91,25 @@ The 5 seeded rows reproduce the pre-refactor hardcoded behavior 1:1, and grant s
 
 `WorkdaySummary` is never written directly by views — it's derived. `timetracking/signals.py` listens for `post_save`/`post_delete` on `WorkSession` and calls `WorkdaySummary.prepocitej(employee, date)`, which recalculates gross minutes, mandatory break deduction, net worked minutes, and overtime from scratch for that employee/day. When touching worked-time logic, edit `prepocitej()`, not the views.
 
+### Pohyby (movements during a work block)
+
+A `Pohyb` lives inside exactly one `WorkSession` (it can't start before it, end after it, or overlap another `Pohyb` in the same block — validated in `clean()`). Employees start/return via `timetracking:start_pohyb` / `return_pohyb` or add one afterwards via `pridat_pohyb`. Behavior is driven by three flags on `TypPohybu` (admin-editable číselník):
+
+- `zapocitava_se_do_pracovni_doby` (default off) — off: the movement's duration is subtracted from worked time (lunch, private errand); on: work keeps running (paid break).
+- `zapocitava_se_u_pruzne_pracovni_doby` (only meaningful together with `zapocitava_se_do_pracovni_doby` on) — for employees whose `TypUvazku.druh_pracovni_doby` is `PRUZNA`, a counted movement only stays counted inside the core block (`CasovyBlokUvazku`); the part outside it is subtracted like a normal movement.
+- `zobrazuje_se_na_pracovisti` — **stored only**: no report reads it yet (the presence overview does not consult `Pohyb`), so it does not currently affect anything.
+
+`WorkdaySummary.prepocitej()` only counts *finished* movements inside *closed* work blocks; an in-progress movement or block is picked up when it closes and triggers the recompute again.
+
 ### Business rules (from `config/settings.py` and model logic)
 
 | Rule | Value |
 |---|---|
 | Mandatory break after | `BREAK_THRESHOLD_HOURS` = 6 hours worked |
 | Break length | `MANDATORY_BREAK_MINUTES` = 30 min (not counted as worked time) |
+| Movements (pohyby) | finished `Pohyb` minutes are subtracted from worked time (same as the mandatory break) unless the `TypPohybu` has `zapocitava_se_do_pracovni_doby` — see "Pohyby" above for the flex-time exception |
 | Overtime | worked minutes beyond `Employee.typ_uvazku.hodiny_denne × 60` for that day |
+| Leave entitlements | `NarokDovolene` / `NarokIndispozicnihoVolna` are global (same for everyone); `aktivni_hodnota(datum)` returns the row with the newest `platne_od <= datum`. `TypStavu.vychozi_narok(datum)` supplies the default balance when no `ZustatekStavu` exists yet. `obnov_rocni_naroky`: dovolená = last year's leftover (min 0) + the yearly entitlement, indispoziční volno = the current value with no carry-over. Changing an entitlement does not recompute existing `ZustatekStavu` rows |
 | Leave accounting | tracked in hours; `ZadostOStav.vypocitej_hodiny()` counts weekdays excluding `StatniSvatek` entries, × `hodiny_denne`, for both approval-based and self-recorded requests |
 | Public holidays | generated per-year from the `holidays` library (`generuj_svatky_cr`), editable afterward in Django admin |
 
