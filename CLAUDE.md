@@ -108,7 +108,7 @@ A `Pohyb` lives inside exactly one `WorkSession` (it can't start before it, end 
 | Mandatory break after | `BREAK_THRESHOLD_HOURS` = 6 hours worked |
 | Break length | `MANDATORY_BREAK_MINUTES` = 30 min (not counted as worked time) |
 | Movements (pohyby) | finished `Pohyb` minutes are subtracted from worked time (same as the mandatory break) unless the `TypPohybu` has `zapocitava_se_do_pracovni_doby` — see "Pohyby" above for the flex-time exception |
-| Overtime | worked minutes beyond `Employee.typ_uvazku.hodiny_denne × 60` for that day |
+| Overtime / balance | `WorkdaySummary.prescos_minuty` = worked minutes − `Employee.typ_uvazku.hodiny_denne × 60` for that day. It is a **signed balance against the daily norm**, not a clamped overtime: positive = overtime, negative = shorter than the norm (a day with no closed block yet, e.g. only an open one, is stored as −norm) |
 | Leave entitlements | `NarokDovolene` / `NarokIndispozicnihoVolna` are global (same for everyone); `aktivni_hodnota(datum)` returns the row with the newest `platne_od <= datum`. `TypStavu.vychozi_narok(datum)` supplies the default balance when no `ZustatekStavu` exists yet. `obnov_rocni_naroky`: dovolená = last year's leftover (min 0) + the yearly entitlement, indispoziční volno = the current value with no carry-over. Changing an entitlement does not recompute existing `ZustatekStavu` rows |
 | Leave accounting | tracked in hours; `ZadostOStav.vypocitej_hodiny()` counts weekdays excluding `StatniSvatek` entries, × `hodiny_denne`, for both approval-based and self-recorded requests |
 | Public holidays | generated per-year from the `holidays` library (`generuj_svatky_cr`), editable afterward in Django admin |
@@ -119,4 +119,4 @@ A `Pohyb` lives inside exactly one `WorkSession` (it can't start before it, end 
 
 ### Scheduled maintenance
 
-`close_open_sessions` (intended to run nightly via Celery Beat) flags `WorkSession` rows still open (`konec__isnull=True`) past a threshold (default 14h) by prepending an `[AUTOMATICKY]` note — it does not close them, just marks them for manual correction.
+`close_open_sessions` (intended to run nightly via Celery Beat) flags `WorkSession` rows still open (`konec__isnull=True`) past a threshold (default 14h) by prepending an `[AUTOMATICKY]` note and setting `opraveno=False`. It does the same for open `Pohyb` rows past the threshold (an `[AUTOMATICKY]` note about the missing return time). It never closes anything — it only marks them for manual correction.
