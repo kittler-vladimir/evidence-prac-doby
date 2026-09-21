@@ -36,7 +36,7 @@
 {% if pocty %}
 <div class="d-flex flex-wrap gap-2 mb-3">
   {% for p in pocty %}
-  <span class="badge bg-light text-dark border">{{ p.popisek }}: {{ p.pocet }}</span>
+  <span class="badge {{ p.stav.badge_trida }}" {% if p.stav.barva %}style="background-color: {{ p.stav.barva }};"{% endif %}>{{ p.stav.popisek }}: {{ p.pocet }}</span>
   {% endfor %}
 </div>
 {% endif %}

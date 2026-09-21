@@ -256,20 +256,20 @@ def prehled_pritomnosti(request):
     # vyskytlo — nový TypStavu se tak v souhrnu objeví bez zásahu do kódu.
     # Pořadí se drží prvního výskytu v radky (stabilní), ne abecedně dle
     # zkratky, aby se kategorie neřadily podle náhody v pojmenování.
+    # Do souhrnu se předává celý StavZamestnance (ne jen popisek), aby legenda
+    # mohla mít stejnou barvu jako badge u jednotlivých řádků.
     pocitadlo = Counter(r["stav"].kod for r in radky)
-    popisky_ostatnich = {}
+    stav_podle_kodu = {}
     for r in radky:
-        kod = r["stav"].kod
-        if kod not in (PRITOMEN, NEPRITOMEN):
-            popisky_ostatnich.setdefault(kod, r["stav"].popisek)
-    poradi_kategorii = [
-        (PRITOMEN, "Přítomen"),
-        *popisky_ostatnich.items(),
-        (NEPRITOMEN, "Nepřítomen"),
+        stav_podle_kodu.setdefault(r["stav"].kod, r["stav"])
+    poradi_kodu = [
+        PRITOMEN,
+        *(kod for kod in stav_podle_kodu if kod not in (PRITOMEN, NEPRITOMEN)),
+        NEPRITOMEN,
     ]
     pocty = [
-        {"popisek": popisek, "pocet": pocitadlo[kod]}
-        for kod, popisek in poradi_kategorii
+        {"stav": stav_podle_kodu[kod], "pocet": pocitadlo[kod]}
+        for kod in poradi_kodu
         if pocitadlo[kod]
     ]
 

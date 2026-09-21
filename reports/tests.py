@@ -157,6 +157,21 @@ class PrehledPritomnostiTestCase(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(self._videni_zamestnanci(response), {self.zam_a.pk})
 
+    def test_legenda_ma_stejnou_barvu_jako_stav_zamestnance(self):
+        dnes = timezone.localdate()
+        ZadostOStav.objects.create(
+            employee=self.zam_b, typ=self.typ_dovolena,
+            datum_od=dnes, datum_do=dnes, stav=ZadostOStav.Stav.SCHVALENO,
+        )
+        self._prihlas(self.zam_a, "a@example.com")
+
+        response = self.client.get(reverse("reports:prehled_pritomnosti"))
+        self.assertEqual(response.status_code, 200)
+        legenda = {p["stav"].kod: p["stav"] for p in response.context["pocty"]}
+        self.assertEqual(legenda[self.typ_dovolena.zkratka].barva, self.typ_dovolena.barva)
+        # badge s barvou dovolené se vykreslí 2× — v legendě a u řádku zaměstnance
+        self.assertContains(response, f"background-color: {self.typ_dovolena.barva};", count=2)
+
     def test_prehled_tymu_sdili_stejny_rozsah_jako_pritomnost(self):
         """Issue #28 — Odbor (prehled_tymu) musí ukazovat stejný okruh lidí jako
         Přítomnost (viditelni_zamestnanci), ne jen CRUD-spravované podřízené."""
