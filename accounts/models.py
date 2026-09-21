@@ -139,8 +139,11 @@ class TypUvazku(models.Model):
         default=DruhPracovniDoby.PRUZNA,
         help_text=_(
             "Pružná: jeden časový blok (jádrová doba). Pevná: jeden nebo "
-            "více závazných časových bloků. Zatím jen evidence — bloky "
-            "se nikde nevynucují, slouží jako podklad pro budoucí validaci."
+            "více závazných časových bloků. Jádrová doba pružného úvazku "
+            "se využívá při výpočtu odpracované doby u pohybů s příznakem "
+            "„započítává se u pružné pracovní doby“. Jinak jsou bloky zatím "
+            "jen evidence — příchody a odchody se vůči nim nekontrolují a "
+            "bloky pevné pracovní doby nevyužívá žádný výpočet."
         ),
     )
     aktivni = models.BooleanField(_("aktivní"), default=True)
