@@ -1,14 +1,16 @@
 ## Description
-On the daily presence overview, the legend counts at the top ("Přítomen: 1", "Dovolená: 2", "Nepřítomen: 5", ...) were all rendered as neutral grey badges, while the same states are colored per employee row. The legend now uses the same badge class and color as the row badges, so absence states are recognizable at a glance.
+Two admin help texts on `TypPohybu` described behavior that didn't match the code, which is misleading for whoever configures movement types in Django admin:
+
+- `zobrazuje_se_na_pracovisti` said it keeps the employee shown as on-site in the daily presence overview — but no report reads this flag; it is stored only.
+- `zapocitava_se_u_pruzne_pracovni_doby` said "evidence only, logic isn't enforced anywhere" — but `WorkdaySummary.prepocitej()` does apply it for flex-time employees (only the part inside the core block stays counted).
 
 ## Changes
-- `reports/views.py`: `prehled_pritomnosti` now passes the full `StavZamestnance` (label, `badge_trida`, `barva`) in each `pocty` entry instead of just a label and count; category ordering (first occurrence, Přítomen first, Nepřítomen last) is unchanged.
-- `templates/reports/prehled_pritomnosti.html`: legend badge uses `{{ p.stav.badge_trida }}` / `p.stav.barva`, the same markup as the row badges.
-- `reports/tests.py`: regression test asserting the legend state carries the type's color and that the colored badge renders in both the legend and the employee row.
+- `timetracking/models.py`: rewrote both `help_text`s to match the code. The first now says it is evidence-only and states the intended meaning; the second drops the false "evidence only" sentence and notes it only matters together with `zapocitava_se_do_pracovni_doby`.
+- `timetracking/migrations/0005_typpohybu_help_texty.py`: metadata-only `AlterField` migration (Django tracks `help_text`); no database schema change.
 
 ## How to test
-1. `python manage.py test` — 56/56 pass (CI runs the same)
-2. Open the daily presence overview on a day with an approved absence (e.g. dovolená or home office) — the legend badge for that state has the same color as the badge next to the employee
+1. `python manage.py makemigrations --check` — no changes; `python manage.py test` — 56/56 pass (CI runs both)
+2. Django admin → Typy pohybu → open one: the two fields show the new help text
 
 ## Issue
-None — small visual fix.
+None — documentation-in-code fix found while updating CLAUDE.md.
