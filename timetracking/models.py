@@ -113,10 +113,11 @@ class TypPohybu(models.Model):
         _("zobrazuje se na pracovišti"),
         default=False,
         help_text=_(
-            "Zapnuto: zaměstnanec je po dobu pohybu v denním přehledu "
-            "přítomnosti nadále veden jako na pracovišti (např. přestávka "
-            "v areálu). Vypnuto (výchozí): pohyb znamená nepřítomnost na "
-            "pracovišti (např. lékař, soukromá záležitost)."
+            "Zatím jen evidence — denní přehled přítomnosti tento příznak "
+            "nečte, takže na nic nemá vliv. Zamýšlený význam: zapnuto = "
+            "zaměstnanec je po dobu pohybu nadále veden jako na pracovišti "
+            "(např. přestávka v areálu), vypnuto (výchozí) = pohyb znamená "
+            "nepřítomnost na pracovišti (např. lékař, soukromá záležitost)."
         ),
     )
     zapocitava_se_u_pruzne_pracovni_doby = models.BooleanField(
@@ -125,8 +126,9 @@ class TypPohybu(models.Model):
         help_text=_(
             "Zapnuto: u zaměstnanců s pružnou pracovní dobou se doba "
             "pohybu do odpracované doby započítává jen v pevné (jádrové) "
-            "části pracovní doby (např. 9–14 hod.); mimo ni se nezapočítává. "
-            "Zatím jen evidence — logika se nikde nevynucuje."
+            "části pracovní doby (např. 9–14 hod.); část mimo ni se "
+            "odečte jako u běžného pohybu. Má smysl jen spolu se zapnutým "
+            "„započítává se do pracovní doby“."
         ),
     )
     aktivni = models.BooleanField(_("aktivní"), default=True)
