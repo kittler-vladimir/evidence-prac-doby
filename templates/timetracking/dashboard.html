@@ -26,28 +26,42 @@
             </p>
             <form method="post" action="{% url 'timetracking:return_pohyb' %}">
               {% csrf_token %}
+              <div class="d-none mb-2" data-cas-pole>
+                <input type="time" name="cas" class="form-control form-control-sm mx-auto" style="max-width:140px">
+              </div>
               <button class="btn btn-warning btn-lg w-100">
                 <i class="bi bi-arrow-return-left"></i> Návrat z pohybu
               </button>
+              <button type="button" class="btn btn-link btn-sm" data-cas-toggle>Změnit čas</button>
             </form>
           {% else %}
             <form method="post" action="{% url 'timetracking:clock_out' %}">
               {% csrf_token %}
+              <div class="d-none mb-2" data-cas-pole>
+                <input type="time" name="cas" class="form-control form-control-sm mx-auto" style="max-width:140px">
+              </div>
               <button class="btn btn-danger btn-lg w-100">
                 <i class="bi bi-box-arrow-right"></i> Odchod
               </button>
+              <button type="button" class="btn btn-link btn-sm" data-cas-toggle>Změnit čas</button>
             </form>
 
             {% if typy_pohybu %}
-              <form method="post" action="{% url 'timetracking:start_pohyb' %}" class="d-flex gap-2 mt-2">
+              <form method="post" action="{% url 'timetracking:start_pohyb' %}" class="mt-2">
                 {% csrf_token %}
-                <select name="typ_id" class="form-select" required>
-                  <option value="">Zahájit pohyb…</option>
-                  {% for typ in typy_pohybu %}
-                    <option value="{{ typ.pk }}">{{ typ.nazev }}</option>
-                  {% endfor %}
-                </select>
-                <button class="btn btn-outline-warning">Start</button>
+                <div class="d-flex gap-2">
+                  <select name="typ_id" class="form-select" required>
+                    <option value="">Zahájit pohyb…</option>
+                    {% for typ in typy_pohybu %}
+                      <option value="{{ typ.pk }}">{{ typ.nazev }}</option>
+                    {% endfor %}
+                  </select>
+                  <button class="btn btn-outline-warning">Start</button>
+                </div>
+                <div class="d-none mt-2" data-cas-pole>
+                  <input type="time" name="cas" class="form-control form-control-sm mx-auto" style="max-width:140px">
+                </div>
+                <button type="button" class="btn btn-link btn-sm" data-cas-toggle>Změnit čas</button>
               </form>
             {% endif %}
           {% endif %}
@@ -59,9 +73,13 @@
           <p class="text-muted">{{ dnes|date:"l, j. F Y" }}</p>
           <form method="post" action="{% url 'timetracking:clock_in' %}">
             {% csrf_token %}
+            <div class="d-none mb-2" data-cas-pole>
+              <input type="time" name="cas" class="form-control form-control-sm mx-auto" style="max-width:140px">
+            </div>
             <button class="btn btn-success btn-lg w-100">
               <i class="bi bi-box-arrow-in-right"></i> Příchod
             </button>
+            <button type="button" class="btn btn-link btn-sm" data-cas-toggle>Změnit čas</button>
           </form>
         {% endif %}
 
@@ -201,4 +219,38 @@
   </div>
 
 </div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+  // "Změnit čas" u rychlých akcí (Příchod/Odchod/Start/Návrat z pohybu) — tlačítko
+  // odkrývá skryté pole s časem, formulář jinak zůstává jednoklikový jako dosud.
+  // Pole musí zůstat bez value, kdykoliv je skryté — jinak by se i při obyčejném
+  // kliknutí na akci potichu odeslal dřív zadaný/předvyplněný čas místo "teď"
+  // (ať už z načtení stránky, nebo z předchozího otevření a opětovného skrytí).
+  document.querySelectorAll("[data-cas-toggle]").forEach(function (tlacitko) {
+    tlacitko.addEventListener("click", function () {
+      var pole = tlacitko.closest("form").querySelector("[data-cas-pole]");
+      var input = pole.querySelector("input");
+      var skryte = pole.classList.toggle("d-none");
+      if (skryte) {
+        input.value = "";
+        return;
+      }
+      var ted = new Date();
+      input.value = String(ted.getHours()).padStart(2, "0") + ":" + String(ted.getMinutes()).padStart(2, "0");
+      input.focus();
+    });
+  });
+
+  // Obnovení stránky z bfcache (tlačítko Zpět v prohlížeči) může vrátit DOM
+  // se zapsanou, ale neodeslanou hodnotou v odkrytém poli — schovat ho zpět
+  // a vyprázdnit, ať se znovu neschová omylem starý čas do dalšího odeslání.
+  window.addEventListener("pageshow", function () {
+    document.querySelectorAll("[data-cas-pole]").forEach(function (pole) {
+      pole.classList.add("d-none");
+      pole.querySelector("input").value = "";
+    });
+  });
+</script>
 {% endblock %}

@@ -1,5 +1,8 @@
+from datetime import datetime
+
 from django.contrib.auth.decorators import login_required
 from django.contrib import messages
+from django.core.exceptions import ValidationError
 from django.shortcuts import render, redirect, get_object_or_404
 from django.utils import timezone
 from django.http import HttpResponseForbidden
@@ -7,6 +10,66 @@ from django.http import HttpResponseForbidden
 from .bilance import rozdel_na_tydny, secti
 from .models import WorkSession, WorkdaySummary, Pohyb, TypPohybu
 from .forms import WorkSessionOpravitForm, WorkSessionRucneForm, PohybRucneForm
+
+
+def _cas_z_pozadavku(request):
+    """Nepovinné pole 'cas' (HH:MM, dnešní datum) u rychlých akcí na dashboardu —
+    prázdné/chybějící znamená 'teď', stejně jako dosud. Vrací (datetime, byl_zadan, chyba).
+    'byl_zadan' odlišuje "uživatel čas výslovně zvolil" od "použilo se výchozí teď" —
+    kontrola shodného dne (viz níže) se smí týkat jen prvního případu, jinak by
+    blokovala i obyčejné jednoklikové akce přes půlnoc. Čas v budoucnosti se odmítá
+    zde — WorkSession/Pohyb.clean() budoucí čas samo o sobě nezakazuje (jen pořadí
+    a překryvy), takže bez této kontroly by šlo "zaznamenat" příchod/pohyb, který
+    ještě vůbec nenastal."""
+    cas_str = request.POST.get("cas", "").strip()
+    if not cas_str:
+        return timezone.now(), False, None
+    try:
+        cas = datetime.strptime(cas_str, "%H:%M").time()
+    except ValueError:
+        return None, True, "Neplatný čas."
+    vysledek = timezone.make_aware(datetime.combine(timezone.localdate(), cas))
+    if vysledek > timezone.now():
+        return None, True, "Čas nemůže být v budoucnosti."
+    return vysledek, True, None
+
+
+def _cas_nebo_chyba(request):
+    """Jako _cas_z_pozadavku, ale chybu rovnou nastaví jako messages.error a
+    vrátí (None, False) — volající pak jen kontroluje 'is None', bez duplicity.
+    Vrací (datetime, byl_zadan)."""
+    cas, byl_zadan, chyba = _cas_z_pozadavku(request)
+    if chyba:
+        messages.error(request, chyba)
+        return None, False
+    return cas, byl_zadan
+
+
+def _stejny_den_nebo_chyba(request, konec, byl_zadan, zacatek_zaznamu, nazev_opravy):
+    """Kontrola shodného dne pro Odchod/Návrat z pohybu — týká se jen výslovně
+    zadaného 'cas' (viz _cas_z_pozadavku), jinak by blokovala i výchozí 'teď'
+    pro záznam otevřený před dneškem (např. session/pohyb přes půlnoc)."""
+    if not byl_zadan:
+        return True
+    if timezone.localtime(konec).date() == timezone.localtime(zacatek_zaznamu).date():
+        return True
+    messages.error(
+        request,
+        f"Tento záznam nezačal dnes — čas jde upravit jen v rámci dnešního "
+        f"dne. Použijte {nazev_opravy}.",
+    )
+    return False
+
+
+def _uloz_nebo_chybu(request, instance):
+    """full_clean() + save(); při ValidationError nastaví messages.error a vrátí False."""
+    try:
+        instance.full_clean()
+    except ValidationError as e:
+        messages.error(request, "; ".join(e.messages))
+        return False
+    instance.save()
+    return True
 
 
 @login_required
@@ -63,12 +126,13 @@ def clock_in(request):
         messages.warning(request, "Již jste přihlášen/a. Nejprve se odhlaste.")
         return redirect("timetracking:dashboard")
 
-    WorkSession.objects.create(
-        employee=employee,
-        zacatek=timezone.now(),
-        zdroj=WorkSession.Zdroj.PRICHOD,
-    )
-    messages.success(request, "Příchod zaznamenán.")
+    zacatek, _ = _cas_nebo_chyba(request)
+    if zacatek is None:
+        return redirect("timetracking:dashboard")
+
+    session = WorkSession(employee=employee, zacatek=zacatek, zdroj=WorkSession.Zdroj.PRICHOD)
+    if _uloz_nebo_chybu(request, session):
+        messages.success(request, "Příchod zaznamenán.")
     return redirect("timetracking:dashboard")
 
 
@@ -91,9 +155,16 @@ def clock_out(request):
         messages.warning(request, "Nejprve zapište návrat z pohybu.")
         return redirect("timetracking:dashboard")
 
-    session.konec = timezone.now()
-    session.save()
-    messages.success(request, "Odchod zaznamenán.")
+    konec, byl_zadan = _cas_nebo_chyba(request)
+    if konec is None:
+        return redirect("timetracking:dashboard")
+
+    if not _stejny_den_nebo_chyba(request, konec, byl_zadan, session.zacatek, "Opravit záznam"):
+        return redirect("timetracking:dashboard")
+
+    session.konec = konec
+    if _uloz_nebo_chybu(request, session):
+        messages.success(request, "Odchod zaznamenán.")
     return redirect("timetracking:dashboard")
 
 
@@ -120,10 +191,13 @@ def start_pohyb(request):
         messages.error(request, "Vyberte platný typ pohybu.")
         return redirect("timetracking:dashboard")
 
-    pohyb = Pohyb(work_session=session, typ=typ, zacatek=timezone.now())
-    pohyb.full_clean()
-    pohyb.save()
-    messages.success(request, "Pohyb zaznamenán.")
+    zacatek, _ = _cas_nebo_chyba(request)
+    if zacatek is None:
+        return redirect("timetracking:dashboard")
+
+    pohyb = Pohyb(work_session=session, typ=typ, zacatek=zacatek)
+    if _uloz_nebo_chybu(request, pohyb):
+        messages.success(request, "Pohyb zaznamenán.")
     return redirect("timetracking:dashboard")
 
 
@@ -144,10 +218,16 @@ def return_pohyb(request):
         messages.warning(request, "Nemáte žádný probíhající pohyb.")
         return redirect("timetracking:dashboard")
 
-    pohyb.konec = timezone.now()
-    pohyb.full_clean()
-    pohyb.save()
-    messages.success(request, "Návrat zaznamenán.")
+    konec, byl_zadan = _cas_nebo_chyba(request)
+    if konec is None:
+        return redirect("timetracking:dashboard")
+
+    if not _stejny_den_nebo_chyba(request, konec, byl_zadan, pohyb.zacatek, "Doplnit pohyb"):
+        return redirect("timetracking:dashboard")
+
+    pohyb.konec = konec
+    if _uloz_nebo_chybu(request, pohyb):
+        messages.success(request, "Návrat zaznamenán.")
     return redirect("timetracking:dashboard")
 
 

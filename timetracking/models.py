@@ -67,6 +67,19 @@ class WorkSession(models.Model):
                 _("Nelze uzavřít blok, dokud v něm probíhá pohyb — nejprve zapište návrat.")
             )
 
+        # Konec bloku nesmí být dřív, než skončil poslední (už uzavřený) pohyb
+        # v něm — jinak by šel zpětně zkrátit blok "pod" pohyb, který v něm
+        # platně proběhl (např. přes rychlou akci Odchod s vlastním časem,
+        # nebo přes ruční opravu záznamu).
+        if self.konec and self.pk:
+            posledni_konec_pohybu = Pohyb.objects.filter(
+                work_session_id=self.pk, konec__isnull=False
+            ).aggregate(models.Max("konec"))["konec__max"]
+            if posledni_konec_pohybu and self.konec < posledni_konec_pohybu:
+                raise ValidationError(
+                    _("Konec bloku nemůže být dřív, než skončil pohyb, který v něm proběhl.")
+                )
+
         # Kontrola překryvu s existujícími bloky stejného zaměstnance
         if self.zacatek:
             qs = WorkSession.objects.filter(employee=self.employee)
