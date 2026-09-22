@@ -387,3 +387,19 @@ class DashboardOtevrenyBlokTests(TestCase):
         obsah = response.content.decode("utf-8")
         self.assertNotIn("8h 0min", obsah)
         self.assertNotIn("text-danger", obsah)
+
+
+class DashboardSvatekZvyrazneniTests(TestCase):
+    """Issue #36 — svátek v tabulce posledních záznamů musí řádek zešednout (byl typo je_saint)."""
+
+    def test_svatek_ma_tridu_table_secondary(self):
+        employee = vytvor_zamestnance()
+        client = Client()
+        client.force_login(employee.user)
+        WorkdaySummary.objects.create(
+            employee=employee, datum=timezone.localdate() - timedelta(days=1),
+            hrube_minuty=0, odpracovane_minuty=0, prescos_minuty=0,
+            je_svatek=True, je_vikend=False,
+        )
+        response = client.get(reverse("timetracking:dashboard"))
+        self.assertContains(response, 'class="table-secondary"')
