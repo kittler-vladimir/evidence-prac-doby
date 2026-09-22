@@ -4,6 +4,7 @@ from django.shortcuts import render, redirect, get_object_or_404
 from django.utils import timezone
 from django.http import HttpResponseForbidden
 
+from .bilance import rozdel_na_tydny, secti
 from .models import WorkSession, WorkdaySummary, Pohyb, TypPohybu
 from .forms import WorkSessionOpravitForm, WorkSessionRucneForm, PohybRucneForm
 
@@ -162,21 +163,19 @@ def prehled_mesice(request):
     rok = int(request.GET.get("rok", dnes.year))
     mesic = int(request.GET.get("mesic", dnes.month))
 
-    souhrny = WorkdaySummary.objects.filter(
+    souhrny = list(WorkdaySummary.objects.filter(
         employee=employee,
         datum__year=rok,
         datum__month=mesic,
-    ).order_by("datum")
-
-    celkem_odpr = sum(s.odpracovane_minuty for s in souhrny)
-    celkem_prescos = sum(s.prescos_minuty for s in souhrny)
+    ).order_by("datum"))
 
     context = {
         "souhrny": souhrny,
+        "tydny": rozdel_na_tydny(souhrny, rok, mesic),
         "rok": rok,
         "mesic": mesic,
-        "celkem_odpr": celkem_odpr,
-        "celkem_prescos": celkem_prescos,
+        "celkem_odpr": sum(s.odpracovane_minuty for s in souhrny),
+        "celkem": secti(souhrny),
     }
     return render(request, "timetracking/prehled_mesice.html", context)
 

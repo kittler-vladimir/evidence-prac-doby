@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load timetracking_extras %}
 {% block title %}Měsíční výkaz{% endblock %}
 
 {% block content %}
@@ -18,8 +19,20 @@
   </div>
   <div class="col-md-3">
     <div class="card shadow-sm text-center py-3">
-      <div class="fs-4 fw-bold text-warning">{% widthratio celkem_prescos 60 1 %}h</div>
-      <small class="text-muted">Přesčas celkem</small>
+      <div class="fs-4 fw-bold text-warning">{{ celkem.prescas|minuty_hm }}</div>
+      <small class="text-muted">Přesčas</small>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="card shadow-sm text-center py-3">
+      <div class="fs-4 fw-bold text-danger">{{ celkem.nedostatek|minuty_hm }}</div>
+      <small class="text-muted">Nedostatek</small>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="card shadow-sm text-center py-3">
+      <div class="fs-4 fw-bold">{{ celkem.bilance|minuty_hm_znamenko }}</div>
+      <small class="text-muted">Bilance</small>
     </div>
   </div>
 </div>
@@ -32,19 +45,24 @@
           <th>Datum</th>
           <th>Odpracováno</th>
           <th>Přesčas</th>
+          <th>Nedostatek</th>
           <th>Svátek/Víkend</th>
         </tr>
       </thead>
       <tbody>
-        {% for s in souhrny %}
+        {% for t in tydny %}
+        {% for s in t.souhrny %}
         <tr {% if s.je_svatek or s.je_vikend %}class="table-secondary"{% endif %}>
           <td>{{ s.datum|date:"j. n. Y (D)" }}</td>
           <td>{% widthratio s.odpracovane_minuty 60 1 %}h</td>
           <td>
-            {% if s.prescos_minuty > 0 %}
-              <span class="badge bg-warning text-dark">+{% widthratio s.prescos_minuty 60 1 %}h</span>
-            {% elif s.prescos_minuty < 0 %}
-              <span class="badge bg-danger">{% widthratio s.prescos_minuty 60 1 %}h</span>
+            {% if s.denni_prescas_minuty %}
+              <span class="badge bg-warning text-dark">{{ s.denni_prescas_minuty|minuty_hm }}</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if s.denni_nedostatek_minuty %}
+              <span class="badge bg-danger">{{ s.denni_nedostatek_minuty|minuty_hm }}</span>
             {% endif %}
           </td>
           <td>
@@ -52,8 +70,15 @@
             {% if s.je_vikend %}<span class="badge bg-secondary">Víkend</span>{% endif %}
           </td>
         </tr>
+        {% endfor %}
+        <tr class="table-light fw-semibold small">
+          <td colspan="2">Týden {{ t.cislo }} ({{ t.od|date:"j. n." }}–{{ t.do|date:"j. n." }})</td>
+          <td>{{ t.bilance.prescas|minuty_hm }}</td>
+          <td>{{ t.bilance.nedostatek|minuty_hm }}</td>
+          <td>Bilance: {{ t.bilance.bilance|minuty_hm_znamenko }}</td>
+        </tr>
         {% empty %}
-        <tr><td colspan="4" class="text-center text-muted py-3">Žádné záznamy.</td></tr>
+        <tr><td colspan="5" class="text-center text-muted py-3">Žádné záznamy.</td></tr>
         {% endfor %}
       </tbody>
     </table>

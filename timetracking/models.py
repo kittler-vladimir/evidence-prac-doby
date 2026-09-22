@@ -287,6 +287,22 @@ class WorkdaySummary(models.Model):
             f"{self.odpracovane_minuty // 60}h {self.odpracovane_minuty % 60}min"
         )
 
+    @property
+    def je_zapocitan(self):
+        """Má den aspoň jeden uzavřený blok? Jen takový se počítá do přesčasu/nedostatku
+        (den jen s otevřeným blokem má uloženo −norma, ale ještě není dokončený)."""
+        return self.hrube_minuty > 0
+
+    @property
+    def denni_prescas_minuty(self):
+        """Přesčas dne = kladná část podepsané bilance prescos_minuty (0, když den není započítaný)."""
+        return max(self.prescos_minuty, 0) if self.je_zapocitan else 0
+
+    @property
+    def denni_nedostatek_minuty(self):
+        """Nedostatek dne = absolutní hodnota záporné části prescos_minuty (0, když den není započítaný)."""
+        return max(-self.prescos_minuty, 0) if self.je_zapocitan else 0
+
     @classmethod
     def prepocitej(cls, employee, datum):
         """
