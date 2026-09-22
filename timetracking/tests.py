@@ -1,5 +1,5 @@
 import re
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone as dt_timezone
 
 from django.core.exceptions import ValidationError
 from django.test import SimpleTestCase, TestCase, Client
@@ -8,6 +8,7 @@ from django.utils import timezone
 
 from accounts.models import User, Employee, Sekce, Odbor, Oddeleni, TypUvazku, CasovyBlokUvazku
 from timetracking.bilance import format_minut, rozdel_na_tydny, secti
+from timetracking.forms import WorkSessionOpravitForm, PohybRucneForm
 from timetracking.models import WorkSession, WorkdaySummary, TypPohybu, Pohyb
 
 
@@ -664,3 +665,83 @@ class CasAkciDochazkyTests(TestCase):
         self.assertIsNone(pohyb.konec)
         response = self.client.get(response.url)
         self.assertContains(response, "Konec pohybu musí být po jeho začátku.")
+
+
+class MistniCasOpravFormularuAStrTests(TestCase):
+    """Issue #41 — WorkSessionOpravitForm/PohybRucneForm i WorkSession/Pohyb.__str__
+    musí zobrazovat skutečný lokální (Europe/Prague) čas, ne uložený UTC bez
+    konverze. Kryje zimní (CET, +1h) i letní (CEST, +2h) offset, aby oprava
+    nebyla nahodile natvrdo napsaná jen pro jeden z nich."""
+
+    def setUp(self):
+        self.employee = vytvor_zamestnance()
+        self.typ = TypPohybu.objects.create(
+            nazev="Oběd", zkratka="OB", zapocitava_se_do_pracovni_doby=False,
+        )
+        # 12:00 UTC v lednu = 13:00 CET (+1h), v červnu = 14:00 CEST (+2h).
+        self.zacatek_cet_utc = datetime(2026, 1, 15, 12, 0, tzinfo=dt_timezone.utc)
+        self.konec_cet_utc = datetime(2026, 1, 15, 14, 30, tzinfo=dt_timezone.utc)
+        self.zacatek_cest_utc = datetime(2026, 6, 15, 12, 0, tzinfo=dt_timezone.utc)
+        self.konec_cest_utc = datetime(2026, 6, 15, 14, 30, tzinfo=dt_timezone.utc)
+
+    def test_oprava_formular_predvyplni_mistni_cas_cet(self):
+        session = WorkSession.objects.create(
+            employee=self.employee, zacatek=self.zacatek_cet_utc, konec=self.konec_cet_utc,
+        )
+        form = WorkSessionOpravitForm(instance=session)
+        self.assertEqual(form.initial["zacatek"], "2026-01-15T13:00")
+        self.assertEqual(form.initial["konec"], "2026-01-15T15:30")
+
+    def test_oprava_formular_predvyplni_mistni_cas_cest(self):
+        session = WorkSession.objects.create(
+            employee=self.employee, zacatek=self.zacatek_cest_utc, konec=self.konec_cest_utc,
+        )
+        form = WorkSessionOpravitForm(instance=session)
+        self.assertEqual(form.initial["zacatek"], "2026-06-15T14:00")
+        self.assertEqual(form.initial["konec"], "2026-06-15T16:30")
+
+    def test_oprava_formular_beze_zmeny_neposune_ulozeny_cas(self):
+        """Regrese: pokud uživatel formulář jen znovu odešle beze změny předvyplněných
+        polí, uložený UTC čas se nesmí posunout o časový offset."""
+        session = WorkSession.objects.create(
+            employee=self.employee, zacatek=self.zacatek_cet_utc, konec=self.konec_cet_utc,
+        )
+        form = WorkSessionOpravitForm(instance=session)
+        data = {
+            "zacatek": form.initial["zacatek"],
+            "konec": form.initial["konec"],
+            "poznamka": "",
+        }
+        znovu_odeslany = WorkSessionOpravitForm(data=data, instance=session)
+        self.assertTrue(znovu_odeslany.is_valid(), znovu_odeslany.errors)
+        ulozeny = znovu_odeslany.save()
+        self.assertEqual(ulozeny.zacatek, self.zacatek_cet_utc)
+        self.assertEqual(ulozeny.konec, self.konec_cet_utc)
+
+    def test_pohyb_rucne_form_predvyplni_mistni_cas(self):
+        session = WorkSession.objects.create(
+            employee=self.employee, zacatek=self.zacatek_cest_utc,
+        )
+        pohyb = Pohyb.objects.create(
+            work_session=session, typ=self.typ,
+            zacatek=self.zacatek_cest_utc, konec=self.konec_cest_utc,
+        )
+        form = PohybRucneForm(instance=pohyb, employee=self.employee)
+        self.assertEqual(form.initial["zacatek"], "2026-06-15T14:00")
+        self.assertEqual(form.initial["konec"], "2026-06-15T16:30")
+
+    def test_worksession_str_pouziva_mistni_cas_cet(self):
+        session = WorkSession.objects.create(
+            employee=self.employee, zacatek=self.zacatek_cet_utc, konec=self.konec_cet_utc,
+        )
+        self.assertIn("15.01.2026 13:00 – 15:30", str(session))
+
+    def test_pohyb_str_pouziva_mistni_cas_cest(self):
+        session = WorkSession.objects.create(
+            employee=self.employee, zacatek=self.zacatek_cest_utc,
+        )
+        pohyb = Pohyb.objects.create(
+            work_session=session, typ=self.typ,
+            zacatek=self.zacatek_cest_utc, konec=self.konec_cest_utc,
+        )
+        self.assertIn("15.06.2026 14:00 – 16:30", str(pohyb))

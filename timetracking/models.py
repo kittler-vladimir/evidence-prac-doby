@@ -46,10 +46,10 @@ class WorkSession(models.Model):
         ordering = ["-zacatek"]
 
     def __str__(self):
-        konec_str = self.konec.strftime("%H:%M") if self.konec else "probíhá"
+        konec_str = timezone.localtime(self.konec).strftime("%H:%M") if self.konec else "probíhá"
         return (
             f"{self.employee} | "
-            f"{self.zacatek.strftime('%d.%m.%Y %H:%M')} – {konec_str}"
+            f"{timezone.localtime(self.zacatek).strftime('%d.%m.%Y %H:%M')} – {konec_str}"
         )
 
     def clean(self):
@@ -184,10 +184,10 @@ class Pohyb(models.Model):
         ordering = ["-zacatek"]
 
     def __str__(self):
-        konec_str = self.konec.strftime("%H:%M") if self.konec else "probíhá"
+        konec_str = timezone.localtime(self.konec).strftime("%H:%M") if self.konec else "probíhá"
         return (
             f"{self.employee} | {self.typ.zkratka} | "
-            f"{self.zacatek.strftime('%d.%m.%Y %H:%M')} – {konec_str}"
+            f"{timezone.localtime(self.zacatek).strftime('%d.%m.%Y %H:%M')} – {konec_str}"
         )
 
     @property
