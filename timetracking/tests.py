@@ -667,6 +667,129 @@ class CasAkciDochazkyTests(TestCase):
         self.assertContains(response, "Konec pohybu musí být po jeho začátku.")
 
 
+class StejnaMinutaJakoNavazujiciZaznamTests(TestCase):
+    """Bug: rychlé akce (Odchod/Start pohybu/Návrat) zamítaly platný zápis, když
+    uživatel přes 'Změnit čas' zadal stejnou minutu, ve které vznikl navazující
+    záznam (ten má z timezone.now() plnou přesnost na mikrosekundy, kdežto pole
+    'cas' nese jen HH:MM) — minutové oříznutí pak vypadalo jako čas těsně PŘED
+    ním a WorkSession/Pohyb.clean() to zamítly jako neplatné pořadí."""
+
+    def setUp(self):
+        self.employee = vytvor_zamestnance()
+        self.typ = TypPohybu.objects.create(
+            nazev="Oběd", zkratka="OB", zapocitava_se_do_pracovni_doby=False,
+        )
+        self.client = Client()
+        self.client.force_login(self.employee.user)
+
+    def test_odchod_se_stejnym_zadanym_casem_jako_prichod_projde(self):
+        """Přísnější varianta: i Příchod byl zadán přes 'cas' (tedy má stejné
+        minutové oříznutí jako Odchod) — časy jsou pak přesně stejné, ne jen
+        ve stejné minutě, takže dorovnání musí zabrat i na '<=', ne jen '<'."""
+        cas_str = timezone.localtime(timezone.now()).strftime("%H:%M")
+        self.client.post(reverse("timetracking:clock_in"), {"cas": cas_str})
+        session = WorkSession.objects.get(employee=self.employee)
+        self.assertEqual(session.zacatek.second, 0)
+        self.client.post(reverse("timetracking:clock_out"), {"cas": cas_str})
+        session.refresh_from_db()
+        self.assertIsNotNone(session.konec)
+        self.assertGreater(session.konec, session.zacatek)
+
+    def test_odchod_ve_stejne_minute_jako_prichod_projde(self):
+        self.client.post(reverse("timetracking:clock_in"))
+        session = WorkSession.objects.get(employee=self.employee)
+        cas_str = timezone.localtime(session.zacatek).strftime("%H:%M")
+        self.client.post(reverse("timetracking:clock_out"), {"cas": cas_str})
+        session.refresh_from_db()
+        self.assertIsNotNone(session.konec)
+        self.assertGreater(session.konec, session.zacatek)
+
+    def test_odchod_5_minut_pred_prichodem_je_odmitnut(self):
+        """Regrese naopak: dorovnání na stejnou minutu nesmí rozvolnit kontrolu
+        pro čas, který je opravdu (o víc než minutu) dřív."""
+        self.client.post(reverse("timetracking:clock_in"))
+        session = WorkSession.objects.get(employee=self.employee)
+        drivejsi = (timezone.localtime(session.zacatek) - timedelta(minutes=5)).strftime("%H:%M")
+        response = self.client.post(
+            reverse("timetracking:clock_out"), {"cas": drivejsi}, follow=True
+        )
+        session.refresh_from_db()
+        self.assertIsNone(session.konec)
+        self.assertContains(response, "Konec musí být po začátku.")
+
+    def test_start_pohybu_ve_stejne_minute_jako_prichod_projde(self):
+        self.client.post(reverse("timetracking:clock_in"))
+        session = WorkSession.objects.get(employee=self.employee)
+        cas_str = timezone.localtime(session.zacatek).strftime("%H:%M")
+        self.client.post(
+            reverse("timetracking:start_pohyb"), {"typ_id": self.typ.pk, "cas": cas_str}
+        )
+        self.assertTrue(
+            Pohyb.objects.filter(work_session=session, konec__isnull=True).exists()
+        )
+
+    def test_navrat_ve_stejne_minute_jako_start_pohybu_projde(self):
+        self.client.post(reverse("timetracking:clock_in"))
+        session = WorkSession.objects.get(employee=self.employee)
+        self.client.post(
+            reverse("timetracking:start_pohyb"),
+            {"typ_id": self.typ.pk, "cas": timezone.localtime(session.zacatek).strftime("%H:%M")},
+        )
+        pohyb = Pohyb.objects.get(work_session=session)
+        cas_str = timezone.localtime(pohyb.zacatek).strftime("%H:%M")
+        self.client.post(reverse("timetracking:return_pohyb"), {"cas": cas_str})
+        pohyb.refresh_from_db()
+        self.assertIsNotNone(pohyb.konec)
+        self.assertGreater(pohyb.konec, pohyb.zacatek)
+
+    def test_odchod_ve_stejne_minute_jako_navrat_z_pohybu_projde(self):
+        """Kryje i druhou (méně přímou) cestu ke stejné chybě — WorkSession.clean()
+        porovnává Odchod i s koncem posledního pohybu v bloku, ne jen s příchodem."""
+        self.client.post(reverse("timetracking:clock_in"))
+        session = WorkSession.objects.get(employee=self.employee)
+        self.client.post(
+            reverse("timetracking:start_pohyb"),
+            {"typ_id": self.typ.pk, "cas": timezone.localtime(session.zacatek).strftime("%H:%M")},
+        )
+        pohyb = Pohyb.objects.get(work_session=session)
+        self.client.post(
+            reverse("timetracking:return_pohyb"),
+            {"cas": timezone.localtime(pohyb.zacatek).strftime("%H:%M")},
+        )
+        pohyb.refresh_from_db()
+        cas_str = timezone.localtime(pohyb.konec).strftime("%H:%M")
+        self.client.post(reverse("timetracking:clock_out"), {"cas": cas_str})
+        session.refresh_from_db()
+        self.assertIsNotNone(session.konec)
+        self.assertGreaterEqual(session.konec, pohyb.konec)
+
+    def test_druhy_pohyb_ve_stejne_minute_jako_konec_prvniho_projde(self):
+        """Kryje třetí cestu ke stejné chybě — Pohyb.clean() u druhého pohybu ve
+        stejném bloku kontroluje překryv s koncem toho předchozího, ne jen se
+        začátkem bloku."""
+        self.client.post(reverse("timetracking:clock_in"))
+        session = WorkSession.objects.get(employee=self.employee)
+        self.client.post(
+            reverse("timetracking:start_pohyb"),
+            {"typ_id": self.typ.pk, "cas": timezone.localtime(session.zacatek).strftime("%H:%M")},
+        )
+        prvni_pohyb = Pohyb.objects.get(work_session=session)
+        self.client.post(
+            reverse("timetracking:return_pohyb"),
+            {"cas": timezone.localtime(prvni_pohyb.zacatek).strftime("%H:%M")},
+        )
+        prvni_pohyb.refresh_from_db()
+        cas_str = timezone.localtime(prvni_pohyb.konec).strftime("%H:%M")
+        self.client.post(
+            reverse("timetracking:start_pohyb"), {"typ_id": self.typ.pk, "cas": cas_str}
+        )
+        druhy_pohyb = Pohyb.objects.filter(
+            work_session=session, konec__isnull=True
+        ).exclude(pk=prvni_pohyb.pk).first()
+        self.assertIsNotNone(druhy_pohyb)
+        self.assertGreater(druhy_pohyb.zacatek, prvni_pohyb.konec)
+
+
 class MistniCasOpravFormularuAStrTests(TestCase):
     """Issue #41 — WorkSessionOpravitForm/PohybRucneForm i WorkSession/Pohyb.__str__
     musí zobrazovat skutečný lokální (Europe/Prague) čas, ne uložený UTC bez

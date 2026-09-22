@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from django.contrib.auth.decorators import login_required
 from django.contrib import messages
@@ -12,7 +12,7 @@ from .models import WorkSession, WorkdaySummary, Pohyb, TypPohybu
 from .forms import WorkSessionOpravitForm, WorkSessionRucneForm, PohybRucneForm
 
 
-def _cas_z_pozadavku(request):
+def _cas_z_pozadavku(request, navazuje_na=None):
     """Nepovinné pole 'cas' (HH:MM, dnešní datum) u rychlých akcí na dashboardu —
     prázdné/chybějící znamená 'teď', stejně jako dosud. Vrací (datetime, byl_zadan, chyba).
     'byl_zadan' odlišuje "uživatel čas výslovně zvolil" od "použilo se výchozí teď" —
@@ -20,7 +20,17 @@ def _cas_z_pozadavku(request):
     blokovala i obyčejné jednoklikové akce přes půlnoc. Čas v budoucnosti se odmítá
     zde — WorkSession/Pohyb.clean() budoucí čas samo o sobě nezakazuje (jen pořadí
     a překryvy), takže bez této kontroly by šlo "zaznamenat" příchod/pohyb, který
-    ještě vůbec nenastal."""
+    ještě vůbec nenastal.
+
+    'navazuje_na' (volitelně) je čas záznamu, na který tento navazuje (např. začátek
+    session pro Odchod, začátek pohybu pro Návrat) — pole 'cas' nese jen HH:MM, kdežto
+    výchozí 'teď' cesta má plnou přesnost na mikrosekundy z timezone.now(). Bez tohoto
+    dorovnání by zadání stejné minuty, ve které navazující záznam vznikl (typicky když
+    uživatel klikne na "Změnit čas" a nechá předvyplněné "teď"), vypadalo jako čas TĚSNĚ
+    PŘED ním a model by ho zamítl jako neplatné pořadí — přitom jde o stejnou minutu.
+    Dorovná se na 'navazuje_na' + 1 mikrosekundu, ne přesně na něj — WorkSession/Pohyb.clean()
+    vyžadují ostře pozdější konec (<=), takže dorovnání na přesně stejný okamžik by pořadovou
+    kontrolu porazilo jen zpola a stejně by skončilo chybou."""
     cas_str = request.POST.get("cas", "").strip()
     if not cas_str:
         return timezone.now(), False, None
@@ -31,18 +41,35 @@ def _cas_z_pozadavku(request):
     vysledek = timezone.make_aware(datetime.combine(timezone.localdate(), cas))
     if vysledek > timezone.now():
         return None, True, "Čas nemůže být v budoucnosti."
+    if navazuje_na and vysledek <= navazuje_na:
+        stejna_minuta = timezone.localtime(vysledek).replace(
+            second=0, microsecond=0
+        ) == timezone.localtime(navazuje_na).replace(second=0, microsecond=0)
+        if stejna_minuta:
+            vysledek = navazuje_na + timedelta(microseconds=1)
     return vysledek, True, None
 
 
-def _cas_nebo_chyba(request):
+def _cas_nebo_chyba(request, navazuje_na=None):
     """Jako _cas_z_pozadavku, ale chybu rovnou nastaví jako messages.error a
     vrátí (None, False) — volající pak jen kontroluje 'is None', bez duplicity.
     Vrací (datetime, byl_zadan)."""
-    cas, byl_zadan, chyba = _cas_z_pozadavku(request)
+    cas, byl_zadan, chyba = _cas_z_pozadavku(request, navazuje_na=navazuje_na)
     if chyba:
         messages.error(request, chyba)
         return None, False
     return cas, byl_zadan
+
+
+def _navazuje_na_konec_bloku(session):
+    """Nejzazší dřívější okamžik, na který smí navazovat Odchod nebo nový pohyb v
+    'session' — začátek bloku, nebo pozdější konec posledního už uzavřeného pohybu
+    v něm (oboje to WorkSession/Pohyb.clean() vyžadují). Použití: 'navazuje_na' pro
+    _cas_z_pozadavku, viz tam."""
+    posledni_konec_pohybu = Pohyb.objects.filter(
+        work_session=session, konec__isnull=False
+    ).order_by("-konec").values_list("konec", flat=True).first()
+    return max(session.zacatek, posledni_konec_pohybu) if posledni_konec_pohybu else session.zacatek
 
 
 def _stejny_den_nebo_chyba(request, konec, byl_zadan, zacatek_zaznamu, nazev_opravy):
@@ -155,7 +182,7 @@ def clock_out(request):
         messages.warning(request, "Nejprve zapište návrat z pohybu.")
         return redirect("timetracking:dashboard")
 
-    konec, byl_zadan = _cas_nebo_chyba(request)
+    konec, byl_zadan = _cas_nebo_chyba(request, navazuje_na=_navazuje_na_konec_bloku(session))
     if konec is None:
         return redirect("timetracking:dashboard")
 
@@ -191,7 +218,7 @@ def start_pohyb(request):
         messages.error(request, "Vyberte platný typ pohybu.")
         return redirect("timetracking:dashboard")
 
-    zacatek, _ = _cas_nebo_chyba(request)
+    zacatek, _ = _cas_nebo_chyba(request, navazuje_na=_navazuje_na_konec_bloku(session))
     if zacatek is None:
         return redirect("timetracking:dashboard")
 
@@ -218,7 +245,7 @@ def return_pohyb(request):
         messages.warning(request, "Nemáte žádný probíhající pohyb.")
         return redirect("timetracking:dashboard")
 
-    konec, byl_zadan = _cas_nebo_chyba(request)
+    konec, byl_zadan = _cas_nebo_chyba(request, navazuje_na=pohyb.zacatek)
     if konec is None:
         return redirect("timetracking:dashboard")
 
