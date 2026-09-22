@@ -180,7 +180,7 @@
           </thead>
           <tbody>
             {% for s in posledni_tydny %}
-            <tr {% if s.je_saint or s.je_vikend %}class="table-secondary"{% endif %}>
+            <tr {% if s.je_svatek or s.je_vikend %}class="table-secondary"{% endif %}>
               <td>{{ s.datum|date:"j. M (D)" }}</td>
               <td>
                 {% widthratio s.odpracovane_minuty 60 1 %}h
