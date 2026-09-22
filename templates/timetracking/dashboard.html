@@ -86,14 +86,7 @@
         <div class="row text-center">
           <div class="col">
             <div class="fs-3 fw-bold text-primary">
-              {{ souhrn.odpracovane_minuty|divisibleby:60|yesno:"," }}
-              {{ souhrn.odpracovane_minuty|floatformat:0 }}
-              {% with h=souhrn.odpracovane_minuty|add:0 %}
-                {{ souhrn.odpracovane_minuty|divisibleby:60 }}
-              {% endwith %}
-              {# Jednoduchý výpis hodin a minut #}
-              {% widthratio souhrn.odpracovane_minuty 60 1 %}h
-              {% with zbytek=souhrn.odpracovane_minuty|add:0 %}{% endwith %}
+              {{ souhrn.odpracovane_minuty|minuty_hm }}
             </div>
             <small class="text-muted">Odpracováno</small>
           </div>
@@ -182,10 +175,7 @@
             {% for s in posledni_tydny %}
             <tr {% if s.je_svatek or s.je_vikend %}class="table-secondary"{% endif %}>
               <td>{{ s.datum|date:"j. M (D)" }}</td>
-              <td>
-                {% widthratio s.odpracovane_minuty 60 1 %}h
-                {{ s.odpracovane_minuty|add:0 }}
-              </td>
+              <td>{{ s.odpracovane_minuty|minuty_hm }}</td>
               <td>
                 {% if s.denni_prescas_minuty %}
                   <span class="badge bg-warning text-dark">{{ s.denni_prescas_minuty|minuty_hm }}</span>

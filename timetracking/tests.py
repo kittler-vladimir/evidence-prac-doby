@@ -403,3 +403,38 @@ class DashboardSvatekZvyrazneniTests(TestCase):
         )
         response = client.get(reverse("timetracking:dashboard"))
         self.assertContains(response, 'class="table-secondary"')
+
+
+class OdpracovanoFormatovaniTests(TestCase):
+    """Odpracováno musí ukazovat hodiny a minuty ("Xh Ymin"), ne zbytky ladicího kódu
+    jako "8h 470" (widthratio zaokrouhlené hodiny + syrové minuty vedle sebe)."""
+
+    def setUp(self):
+        self.employee = vytvor_zamestnance()
+        self.client = Client()
+        self.client.force_login(self.employee.user)
+        self.dnes = timezone.localdate()
+        WorkdaySummary.objects.create(
+            employee=self.employee, datum=self.dnes,
+            hrube_minuty=470, odpracovane_minuty=470, prescos_minuty=-10,
+        )
+        WorkdaySummary.objects.create(
+            employee=self.employee, datum=self.dnes - timedelta(days=1),
+            hrube_minuty=470, odpracovane_minuty=470, prescos_minuty=-10,
+        )
+
+    def test_dashboard_ukazuje_hodiny_a_minuty_ne_zbytky_ladiciho_kodu(self):
+        response = self.client.get(reverse("timetracking:dashboard"))
+        obsah = response.content.decode("utf-8")
+        self.assertIn("7h 50min", obsah)
+        self.assertNotIn("8h 470", obsah)
+        self.assertNotIn("470</td>", obsah)
+
+    def test_vykaz_ukazuje_hodiny_a_minuty(self):
+        response = self.client.get(
+            reverse("timetracking:prehled_mesice"),
+            {"rok": self.dnes.year, "mesic": self.dnes.month},
+        )
+        obsah = response.content.decode("utf-8")
+        self.assertIn("7h 50min", obsah)
+        self.assertNotIn("8h 470", obsah)
