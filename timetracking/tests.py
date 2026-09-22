@@ -1,3 +1,4 @@
+import re
 from datetime import date, datetime, time, timedelta
 
 from django.core.exceptions import ValidationError
@@ -438,3 +439,228 @@ class OdpracovanoFormatovaniTests(TestCase):
         obsah = response.content.decode("utf-8")
         self.assertIn("7h 50min", obsah)
         self.assertNotIn("8h 470", obsah)
+
+
+class CasAkciDochazkyTests(TestCase):
+    """Issue #39 — Příchod/Odchod/Start/Návrat z pohybu jdou zaznamenat na dřívější
+    (dnešní) čas přes nepovinné pole 'cas', s výchozím chováním beze změny."""
+
+    def setUp(self):
+        self.employee = vytvor_zamestnance()
+        self.typ = TypPohybu.objects.create(
+            nazev="Oběd", zkratka="OB", zapocitava_se_do_pracovni_doby=False,
+        )
+        self.client = Client()
+        self.client.force_login(self.employee.user)
+
+    @staticmethod
+    def _cas_pred(minuty):
+        """Vrátí (řetězec 'HH:MM' pro POST, očekávaný aware datetime). Očekávaný čas
+        je oříznutý na celé minuty stejně jako to udělá server (strptime("%H:%M") dá
+        time() bez vteřin) — srovnání pak jde na assertEqual, ne na assertAlmostEqual
+        s rizikem flaky testu z oříznutí vteřin + latence mezi voláním a assertem."""
+        cil = timezone.localtime(timezone.now() - timedelta(minutes=minuty))
+        oriznuto = cil.replace(second=0, microsecond=0)
+        return oriznuto.strftime("%H:%M"), oriznuto
+
+    def test_clock_in_bez_cas_pouzije_ted(self):
+        pred = timezone.now()
+        self.client.post(reverse("timetracking:clock_in"))
+        session = WorkSession.objects.get(employee=self.employee)
+        self.assertGreaterEqual(session.zacatek, pred)
+
+    def test_skryte_pole_cas_nema_predvyplnenou_hodnotu(self):
+        """Regrese: pole s časem nesmí mít server-side předvyplněnou hodnotu (např.
+        {% now %}) — i skryté (d-none) pole se s formulářem vždy odešle, takže by
+        obyčejné kliknutí na akci potichu poslalo čas z načtení stránky místo 'teď'.
+        Hledá <input …> tagy s name="cas" bez ohledu na pořadí atributů, aby test
+        nebyl závislý na přesném znění řádku v šabloně."""
+        response = self.client.get(reverse("timetracking:dashboard"))
+        obsah = response.content.decode("utf-8")
+        cas_inputy = re.findall(r"<input\b[^>]*\bname=\"cas\"[^>]*>", obsah)
+        self.assertTrue(cas_inputy, "V dashboardu chybí pole <input name=\"cas\">.")
+        for tag in cas_inputy:
+            self.assertNotIn("value=", tag)
+
+    def test_clock_in_s_cas_pouzije_zvoleny_cas(self):
+        cas_str, ocekavano = self._cas_pred(30)
+        self.client.post(reverse("timetracking:clock_in"), {"cas": cas_str})
+        session = WorkSession.objects.get(employee=self.employee)
+        self.assertEqual(session.zacatek, ocekavano)
+
+    def test_clock_in_s_neplatnym_casem_nic_nevytvori(self):
+        response = self.client.post(
+            reverse("timetracking:clock_in"), {"cas": "nesmysl"}, follow=True
+        )
+        self.assertFalse(WorkSession.objects.filter(employee=self.employee).exists())
+        self.assertContains(response, "Neplatný čas.", status_code=200)
+
+    def test_clock_in_s_budoucim_casem_je_odmitnut(self):
+        cas_v_budoucnosti = timezone.localtime(
+            timezone.now() + timedelta(minutes=30)
+        ).strftime("%H:%M")
+        response = self.client.post(
+            reverse("timetracking:clock_in"), {"cas": cas_v_budoucnosti}, follow=True
+        )
+        self.assertFalse(WorkSession.objects.filter(employee=self.employee).exists())
+        self.assertContains(response, "Čas nemůže být v budoucnosti.", status_code=200)
+
+    def test_clock_in_s_prekryvajicim_casem_zahlasi_chybu_neni_500(self):
+        WorkSession.objects.create(
+            employee=self.employee,
+            zacatek=timezone.now() - timedelta(hours=2),
+            konec=timezone.now() - timedelta(minutes=10),
+        )
+        cas_str, _ = self._cas_pred(60)
+        response = self.client.post(
+            reverse("timetracking:clock_in"), {"cas": cas_str}
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(WorkSession.objects.filter(employee=self.employee).count(), 1)
+        response = self.client.get(response.url)
+        self.assertContains(response, "překrývá")
+
+    def test_clock_out_s_casem_pred_zacatkem_zahlasi_chybu(self):
+        session = WorkSession.objects.create(
+            employee=self.employee, zacatek=timezone.now() - timedelta(minutes=10),
+        )
+        cas_str, _ = self._cas_pred(20)
+        response = self.client.post(
+            reverse("timetracking:clock_out"), {"cas": cas_str}
+        )
+        session.refresh_from_db()
+        self.assertIsNone(session.konec)
+        response = self.client.get(response.url)
+        self.assertContains(response, "Konec musí být po začátku.")
+
+    def test_clock_out_s_platnym_casem_ho_pouzije(self):
+        session = WorkSession.objects.create(
+            employee=self.employee, zacatek=timezone.now() - timedelta(hours=1),
+        )
+        cas_str, ocekavano = self._cas_pred(10)
+        self.client.post(reverse("timetracking:clock_out"), {"cas": cas_str})
+        session.refresh_from_db()
+        self.assertEqual(session.konec, ocekavano)
+
+    def test_clock_out_s_casem_pred_koncem_uz_uzavreneho_pohybu_zahlasi_chybu(self):
+        """Odchod nesmí zkrátit blok pod konec pohybu, který v něm už platně proběhl
+        (jinak by WorkdaySummary.prepocitej() počítal nesmyslné/záporné odpracované minuty)."""
+        session = WorkSession.objects.create(
+            employee=self.employee, zacatek=timezone.now() - timedelta(hours=2),
+        )
+        Pohyb.objects.create(
+            work_session=session, typ=self.typ,
+            zacatek=timezone.now() - timedelta(minutes=40),
+            konec=timezone.now() - timedelta(minutes=20),
+        )
+        cas_str, _ = self._cas_pred(30)  # 30 min zpátky, tj. před koncem pohybu (20 min zpátky)
+        response = self.client.post(reverse("timetracking:clock_out"), {"cas": cas_str})
+        session.refresh_from_db()
+        self.assertIsNone(session.konec)
+        response = self.client.get(response.url)
+        self.assertContains(response, "Konec bloku nemůže být dřív, než skončil pohyb, který v něm proběhl.")
+
+    def test_clock_out_bez_cas_funguje_i_pro_blok_ktery_nezacal_dnes(self):
+        """Regrese: kontrola shodného dne se smí týkat jen výslovně zadaného času —
+        obyčejné jednoklikové Odchod (bez 'Změnit čas') musí fungovat i pro session
+        otevřenou před dneškem (typicky přes půlnoc), stejně jako dosud."""
+        session = WorkSession.objects.create(
+            employee=self.employee, zacatek=timezone.now() - timedelta(days=2),
+        )
+        self.client.post(reverse("timetracking:clock_out"))
+        session.refresh_from_db()
+        self.assertIsNotNone(session.konec)
+
+    def test_return_pohyb_bez_cas_funguje_i_pro_pohyb_ktery_nezacal_dnes(self):
+        session = WorkSession.objects.create(
+            employee=self.employee, zacatek=timezone.now() - timedelta(days=2),
+        )
+        pohyb = Pohyb.objects.create(
+            work_session=session, typ=self.typ, zacatek=timezone.now() - timedelta(days=2),
+        )
+        self.client.post(reverse("timetracking:return_pohyb"))
+        pohyb.refresh_from_db()
+        self.assertIsNotNone(pohyb.konec)
+
+    def test_clock_out_s_casem_pro_blok_ktery_nezacal_dnes_zahlasi_chybu(self):
+        """Pole nese jen čas, ne datum — pro blok otevřený před dneškem (např. zapomenutý
+        odchod z minulého dne, viz close_open_sessions) by se jinak konec tiše datoval
+        na dnešek, místo aby uživatele nasměroval na Opravit záznam."""
+        session = WorkSession.objects.create(
+            employee=self.employee, zacatek=timezone.now() - timedelta(days=2),
+        )
+        cas_str, _ = self._cas_pred(30)
+        response = self.client.post(reverse("timetracking:clock_out"), {"cas": cas_str})
+        session.refresh_from_db()
+        self.assertIsNone(session.konec)
+        response = self.client.get(response.url)
+        self.assertContains(response, "Opravit záznam")
+
+    def test_return_pohyb_s_casem_pro_pohyb_ktery_nezacal_dnes_zahlasi_chybu(self):
+        session = WorkSession.objects.create(
+            employee=self.employee, zacatek=timezone.now() - timedelta(days=2),
+        )
+        pohyb = Pohyb.objects.create(
+            work_session=session, typ=self.typ, zacatek=timezone.now() - timedelta(days=2),
+        )
+        cas_str, _ = self._cas_pred(30)
+        response = self.client.post(reverse("timetracking:return_pohyb"), {"cas": cas_str})
+        pohyb.refresh_from_db()
+        self.assertIsNone(pohyb.konec)
+        response = self.client.get(response.url)
+        self.assertContains(response, "Doplnit pohyb")
+
+    def test_start_pohyb_s_platnym_casem_ho_pouzije(self):
+        session = WorkSession.objects.create(
+            employee=self.employee, zacatek=timezone.now() - timedelta(hours=1),
+        )
+        cas_str, ocekavano = self._cas_pred(5)
+        self.client.post(
+            reverse("timetracking:start_pohyb"),
+            {"typ_id": self.typ.pk, "cas": cas_str},
+        )
+        pohyb = Pohyb.objects.get(work_session=session)
+        self.assertEqual(pohyb.zacatek, ocekavano)
+
+    def test_start_pohyb_s_casem_pred_zacatkem_bloku_zahlasi_chybu_neni_500(self):
+        session = WorkSession.objects.create(
+            employee=self.employee, zacatek=timezone.now() - timedelta(minutes=5),
+        )
+        cas_str, _ = self._cas_pred(30)
+        response = self.client.post(
+            reverse("timetracking:start_pohyb"),
+            {"typ_id": self.typ.pk, "cas": cas_str},
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(Pohyb.objects.filter(work_session=session).exists())
+        response = self.client.get(response.url)
+        self.assertContains(response, "nemůže začít před začátkem pracovního bloku")
+
+    def test_return_pohyb_s_platnym_casem_ho_pouzije(self):
+        session = WorkSession.objects.create(
+            employee=self.employee, zacatek=timezone.now() - timedelta(hours=1),
+        )
+        pohyb = Pohyb.objects.create(
+            work_session=session, typ=self.typ, zacatek=timezone.now() - timedelta(minutes=20),
+        )
+        cas_str, ocekavano = self._cas_pred(5)
+        self.client.post(reverse("timetracking:return_pohyb"), {"cas": cas_str})
+        pohyb.refresh_from_db()
+        self.assertEqual(pohyb.konec, ocekavano)
+
+    def test_return_pohyb_s_casem_pred_zacatkem_pohybu_zahlasi_chybu_neni_500(self):
+        session = WorkSession.objects.create(
+            employee=self.employee, zacatek=timezone.now() - timedelta(hours=1),
+        )
+        pohyb = Pohyb.objects.create(
+            work_session=session, typ=self.typ, zacatek=timezone.now() - timedelta(minutes=20),
+        )
+        cas_str, _ = self._cas_pred(30)
+        response = self.client.post(
+            reverse("timetracking:return_pohyb"), {"cas": cas_str}
+        )
+        self.assertEqual(response.status_code, 302)
+        pohyb.refresh_from_db()
+        self.assertIsNone(pohyb.konec)
+        response = self.client.get(response.url)
+        self.assertContains(response, "Konec pohybu musí být po jeho začátku.")
