@@ -1,5 +1,6 @@
 from django import forms
 from django.db.models import Q
+from django.utils import timezone
 from .models import WorkSession, Pohyb, TypPohybu
 
 
@@ -20,11 +21,12 @@ class WorkSessionOpravitForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # Přizpůsobení formátu pro datetime-local input
+        # Přizpůsobení formátu pro datetime-local input — přes localtime(), jinak
+        # by se pole předvyplnilo uloženým UTC časem místo skutečného lokálního.
         if self.instance.zacatek:
-            self.initial["zacatek"] = self.instance.zacatek.strftime("%Y-%m-%dT%H:%M")
+            self.initial["zacatek"] = timezone.localtime(self.instance.zacatek).strftime("%Y-%m-%dT%H:%M")
         if self.instance.konec:
-            self.initial["konec"] = self.instance.konec.strftime("%Y-%m-%dT%H:%M")
+            self.initial["konec"] = timezone.localtime(self.instance.konec).strftime("%Y-%m-%dT%H:%M")
 
 
 class WorkSessionRucneForm(forms.ModelForm):
@@ -94,9 +96,9 @@ class PohybRucneForm(forms.ModelForm):
         super().__init__(*args, **kwargs)
         self.fields["typ"].queryset = TypPohybu.objects.filter(aktivni=True)
         if self.instance.zacatek:
-            self.initial["zacatek"] = self.instance.zacatek.strftime("%Y-%m-%dT%H:%M")
+            self.initial["zacatek"] = timezone.localtime(self.instance.zacatek).strftime("%Y-%m-%dT%H:%M")
         if self.instance.konec:
-            self.initial["konec"] = self.instance.konec.strftime("%Y-%m-%dT%H:%M")
+            self.initial["konec"] = timezone.localtime(self.instance.konec).strftime("%Y-%m-%dT%H:%M")
 
     def clean(self):
         cleaned = super().clean()
