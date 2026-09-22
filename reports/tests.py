@@ -2,13 +2,13 @@ from datetime import date
 from decimal import Decimal
 
 from django.contrib.auth import get_user_model
-from django.test import TestCase
+from django.test import Client, TestCase
 from django.urls import reverse
 from django.utils import timezone
 
 from accounts.models import Employee, Funkce, Oddeleni, Odbor, Sekce, TypUvazku
 from leaves.models import TypStavu, ZadostOStav
-from timetracking.models import WorkSession
+from timetracking.models import WorkSession, WorkdaySummary
 from reports.services import NEPRITOMEN, PRITOMEN, stav_zamestnance
 
 User = get_user_model()
@@ -198,3 +198,79 @@ class PrehledPritomnostiTestCase(TestCase):
         self._prihlas(self.zam_a, "a@example.com")
         response = self.client.get(reverse("reports:vyhledat_zamestnance"))
         self.assertEqual(response.context["vysledky"], [])
+
+
+class PrehledTymuAExportBilanceTestCase(TestCase):
+    """Issue #34 — Odbor a XLSX export ukazují přesčas/nedostatek zvlášť, bez záporných hodin."""
+
+    def setUp(self):
+        sekce = Sekce.objects.create(nazev="Sekce", kod="S3")
+        odbor = Odbor.objects.create(sekce=sekce, nazev="Odbor", kod="O3")
+        oddeleni = Oddeleni.objects.create(odbor=odbor, nazev="Oddeleni", kod="OD3")
+        uvazek = TypUvazku.objects.create(
+            nazev="Plny uvazek", hodiny_denne=Decimal("8.00"), hodiny_tyydne=Decimal("40.00")
+        )
+        user = User.objects.create_user(
+            username="d@example.com", email="d@example.com",
+            first_name="Dana", last_name="Dvorakova", password="test12345",
+        )
+        self.zam = Employee.objects.create(
+            user=user, osobni_cislo="4", oddeleni=oddeleni,
+            typ_uvazku=uvazek, datum_nastupu=date(2020, 1, 1),
+        )
+        # Po 7.9. (+45), Út 8.9. (-90), rozpracovaný den 9.9. (bez uzavřeného bloku)
+        WorkdaySummary.objects.create(
+            employee=self.zam, datum=date(2026, 9, 7),
+            hrube_minuty=525, odpracovane_minuty=525, prescos_minuty=45,
+        )
+        WorkdaySummary.objects.create(
+            employee=self.zam, datum=date(2026, 9, 8),
+            hrube_minuty=390, odpracovane_minuty=390, prescos_minuty=-90,
+        )
+        WorkdaySummary.objects.create(
+            employee=self.zam, datum=date(2026, 9, 9),
+            hrube_minuty=0, odpracovane_minuty=0, prescos_minuty=-480,
+        )
+        self.client = Client()
+        user.set_password("test12345")
+        user.save()
+        self.assertTrue(self.client.login(username="d@example.com", password="test12345"))
+
+    def test_odbor_ukazuje_prescas_a_nedostatek_zvlast_bez_zapornych_hodin(self):
+        response = self.client.get(reverse("reports:prehled_tymu"), {"rok": 2026, "mesic": 9})
+        self.assertEqual(response.status_code, 200)
+        obsah = response.content.decode("utf-8")
+        self.assertNotIn("-2h", obsah)
+        self.assertNotIn("-1h", obsah)
+        self.assertIn("Nedostatek", obsah)
+
+        (skupina,) = response.context["skupiny"]
+        (radek,) = skupina["radky"]
+        self.assertEqual((radek["prescas_minuty"], radek["nedostatek_minuty"]), (45, 90))
+
+    def test_export_xlsx_ma_tydenni_a_mesicni_souhrn_bez_zapornych_hodin(self):
+        import openpyxl
+        from io import BytesIO
+
+        response = self.client.get(reverse("reports:export_xlsx"), {"rok": 2026, "mesic": 9})
+        self.assertEqual(response.status_code, 200)
+
+        wb = openpyxl.load_workbook(BytesIO(response.content))
+        ws = wb.active
+        hlavicka = [c.value for c in next(ws.iter_rows(min_row=1, max_row=1))]
+        self.assertEqual(hlavicka, ["Datum", "Den", "Odpracováno", "Přesčas", "Nedostatek", "Svátek/Víkend", "Bilance"])
+
+        popisky = [row[0].value for row in ws.iter_rows(min_row=2) if row[0].value]
+        tydenni_radky = [p for p in popisky if p and p.startswith("Týden")]
+        self.assertEqual(len(tydenni_radky), 1)
+        self.assertIn("Celkem za měsíc", popisky)
+
+        for row in ws.iter_rows(min_row=2):
+            for cell in row:
+                if isinstance(cell.value, str):
+                    self.assertNotIn("-2h", cell.value)
+
+        radek_mesic = next(r for r in ws.iter_rows(min_row=2) if r[0].value == "Celkem za měsíc")
+        self.assertEqual(radek_mesic[3].value, "0h 45min")   # Přesčas
+        self.assertEqual(radek_mesic[4].value, "1h 30min")   # Nedostatek
+        self.assertEqual(radek_mesic[6].value, "−0h 45min")  # Bilance

@@ -1,11 +1,12 @@
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 
 from django.core.exceptions import ValidationError
-from django.test import TestCase, Client
+from django.test import SimpleTestCase, TestCase, Client
 from django.urls import reverse
 from django.utils import timezone
 
 from accounts.models import User, Employee, Sekce, Odbor, Oddeleni, TypUvazku, CasovyBlokUvazku
+from timetracking.bilance import format_minut, rozdel_na_tydny, secti
 from timetracking.models import WorkSession, WorkdaySummary, TypPohybu, Pohyb
 
 
@@ -229,3 +230,160 @@ class ClockOutBlockedByOpenPohybTests(TestCase):
             self.session.full_clean()
         pohyb.refresh_from_db()
         self.assertIsNone(pohyb.konec)
+
+
+def _souhrn(datum, prescos, hrube=480):
+    return WorkdaySummary(datum=datum, hrube_minuty=hrube, prescos_minuty=prescos)
+
+
+class FormatMinutTests(SimpleTestCase):
+    def test_absolutni_hodnota_bez_znamenka(self):
+        for minuty, ocekavano in [
+            (0, "0h 0min"), (59, "0h 59min"), (60, "1h 0min"), (61, "1h 1min"),
+            (90, "1h 30min"), (-90, "1h 30min"), (-60, "1h 0min"), (-1, "0h 1min"),
+        ]:
+            with self.subTest(minuty=minuty):
+                self.assertEqual(format_minut(minuty), ocekavano)
+
+    def test_znamenko_jen_u_zaporne_bilance(self):
+        self.assertEqual(format_minut(-90, se_znamenkem=True), "−1h 30min")
+        self.assertEqual(format_minut(-1, se_znamenkem=True), "−0h 1min")
+        self.assertEqual(format_minut(90, se_znamenkem=True), "1h 30min")
+        self.assertEqual(format_minut(0, se_znamenkem=True), "0h 0min")
+
+    def test_zaporna_hodnota_nikdy_nedava_zaporne_minuty(self):
+        # regrese: -90 // 60 == -2 a -90 % 60 == 30 vedlo k "-2h 30min"
+        self.assertNotIn("-2h", format_minut(-90, se_znamenkem=True))
+        self.assertNotIn("-2h", format_minut(-90))
+
+
+class DenniPrescasANedostatekTests(SimpleTestCase):
+    def test_kladna_bilance_je_prescas(self):
+        s = _souhrn(date(2026, 9, 7), 45)
+        self.assertEqual((s.denni_prescas_minuty, s.denni_nedostatek_minuty), (45, 0))
+
+    def test_zaporna_bilance_je_nedostatek(self):
+        s = _souhrn(date(2026, 9, 8), -90)
+        self.assertEqual((s.denni_prescas_minuty, s.denni_nedostatek_minuty), (0, 90))
+
+    def test_den_presne_na_norme_nema_nic(self):
+        s = _souhrn(date(2026, 9, 8), 0)
+        self.assertEqual((s.denni_prescas_minuty, s.denni_nedostatek_minuty), (0, 0))
+
+    def test_den_bez_uzavreneho_bloku_se_nezapocita(self):
+        s = _souhrn(date(2026, 9, 9), -480, hrube=0)
+        self.assertFalse(s.je_zapocitan)
+        self.assertEqual((s.denni_prescas_minuty, s.denni_nedostatek_minuty), (0, 0))
+
+
+class RozdeleniNaTydnyTests(SimpleTestCase):
+    def test_tydenni_a_mesicni_soucty(self):
+        souhrny = [
+            _souhrn(date(2026, 9, 7), 45),
+            _souhrn(date(2026, 9, 8), -90),
+            _souhrn(date(2026, 9, 9), -480, hrube=0),  # jen otevřený blok
+            _souhrn(date(2026, 9, 10), -30),
+        ]
+        tydny = rozdel_na_tydny(souhrny, 2026, 9)
+        self.assertEqual(len(tydny), 1)
+        tyden = tydny[0]
+        self.assertEqual((tyden.cislo, tyden.od, tyden.do), (37, date(2026, 9, 7), date(2026, 9, 13)))
+        self.assertEqual((tyden.bilance.prescas, tyden.bilance.nedostatek, tyden.bilance.bilance), (45, 120, -75))
+        celkem = secti(souhrny)
+        self.assertEqual((celkem.prescas, celkem.nedostatek, celkem.bilance), (45, 120, -75))
+        self.assertEqual(format_minut(celkem.bilance, se_znamenkem=True), "−1h 15min")
+
+    def test_tyden_zasahujici_do_sousedniho_mesice_je_orezany(self):
+        # 1. 9. 2026 je úterý ISO týdne 36 (pondělí 31. 8.); 30. 9. je středa týdne 40 (do 4. 10.)
+        souhrny = [_souhrn(date(2026, 9, 1), 10), _souhrn(date(2026, 9, 30), -20)]
+        prvni, posledni = rozdel_na_tydny(souhrny, 2026, 9)
+        self.assertEqual((prvni.cislo, prvni.od, prvni.do), (36, date(2026, 9, 1), date(2026, 9, 6)))
+        self.assertEqual((posledni.cislo, posledni.od, posledni.do), (40, date(2026, 9, 28), date(2026, 9, 30)))
+
+    def test_iso_tyden_pres_hranici_roku(self):
+        # ISO týden 1/2026 začíná v pondělí 29. 12. 2025
+        (tyden,) = rozdel_na_tydny([_souhrn(date(2026, 1, 1), 5)], 2026, 1)
+        self.assertEqual((tyden.cislo, tyden.od, tyden.do), (1, date(2026, 1, 1), date(2026, 1, 4)))
+
+    def test_prosinec_konci_31_12(self):
+        (tyden,) = rozdel_na_tydny([_souhrn(date(2026, 12, 31), 5)], 2026, 12)
+        self.assertEqual(tyden.do, date(2026, 12, 31))
+
+    def test_mesic_bez_zaznamu(self):
+        self.assertEqual(rozdel_na_tydny([], 2026, 9), [])
+        self.assertEqual((secti([]).prescas, secti([]).nedostatek), (0, 0))
+
+    def test_zamestnanec_jen_s_nedostatkem(self):
+        celkem = secti([_souhrn(date(2026, 9, 7), -30), _souhrn(date(2026, 9, 8), -60)])
+        self.assertEqual((celkem.prescas, celkem.nedostatek, celkem.bilance), (0, 90, -90))
+
+
+class PrehledMesiceViewTests(TestCase):
+    """Issue #34 — Výkaz ukazuje přesčas a nedostatek zvlášť, se souhrny po týdnech."""
+
+    def setUp(self):
+        self.employee = vytvor_zamestnance()
+        self.client = Client()
+        self.client.force_login(self.employee.user)
+        # Po 7.9. (+45), Út 8.9. (-90), rozpracovaný den 9.9. (bez uzavřeného bloku), Čt 10.9. (-30)
+        WorkdaySummary.objects.create(
+            employee=self.employee, datum=date(2026, 9, 7),
+            hrube_minuty=525, odpracovane_minuty=525, prescos_minuty=45,
+        )
+        WorkdaySummary.objects.create(
+            employee=self.employee, datum=date(2026, 9, 8),
+            hrube_minuty=390, odpracovane_minuty=390, prescos_minuty=-90,
+        )
+        WorkdaySummary.objects.create(
+            employee=self.employee, datum=date(2026, 9, 9),
+            hrube_minuty=0, odpracovane_minuty=0, prescos_minuty=-480,
+        )
+        WorkdaySummary.objects.create(
+            employee=self.employee, datum=date(2026, 9, 10),
+            hrube_minuty=450, odpracovane_minuty=450, prescos_minuty=-30,
+        )
+
+    def test_tydenni_a_mesicni_souhrny_a_zadne_zaporne_hodiny(self):
+        response = self.client.get(reverse("timetracking:prehled_mesice"), {"rok": 2026, "mesic": 9})
+        self.assertEqual(response.status_code, 200)
+
+        (tyden,) = response.context["tydny"]
+        self.assertEqual(tyden.cislo, 37)
+        self.assertEqual((tyden.bilance.prescas, tyden.bilance.nedostatek), (45, 120))
+
+        celkem = response.context["celkem"]
+        self.assertEqual((celkem.prescas, celkem.nedostatek, celkem.bilance), (45, 120, -75))
+
+        obsah = response.content.decode("utf-8")
+        self.assertNotIn("-2h", obsah)
+        self.assertNotIn("-1h", obsah)
+        self.assertIn("Týden 37", obsah)
+        self.assertIn("Bilance", obsah)
+
+    def test_rozpracovany_den_nema_prescas_ani_nedostatek(self):
+        response = self.client.get(reverse("timetracking:prehled_mesice"), {"rok": 2026, "mesic": 9})
+        (tyden,) = response.context["tydny"]
+        rozpracovany = next(s for s in tyden.souhrny if s.datum == date(2026, 9, 9))
+        self.assertFalse(rozpracovany.je_zapocitan)
+        self.assertEqual((rozpracovany.denni_prescas_minuty, rozpracovany.denni_nedostatek_minuty), (0, 0))
+
+
+class DashboardOtevrenyBlokTests(TestCase):
+    """Issue #34 — den jen s otevřeným blokem se na dashboardu neukazuje jako nedostatek."""
+
+    def setUp(self):
+        self.employee = vytvor_zamestnance()
+        self.client = Client()
+        self.client.force_login(self.employee.user)
+        self.dnes = timezone.localdate()
+        WorkdaySummary.objects.create(
+            employee=self.employee, datum=self.dnes,
+            hrube_minuty=0, odpracovane_minuty=0, prescos_minuty=-480,
+        )
+
+    def test_dnesni_karta_ukazuje_pomlcku_misto_zaporneho_nedostatku(self):
+        response = self.client.get(reverse("timetracking:dashboard"))
+        self.assertEqual(response.status_code, 200)
+        obsah = response.content.decode("utf-8")
+        self.assertNotIn("8h 0min", obsah)
+        self.assertNotIn("text-danger", obsah)
