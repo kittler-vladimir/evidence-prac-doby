@@ -128,4 +128,6 @@ A `Pohyb` lives inside exactly one `WorkSession` (it can't start before it, end 
 
 ### Scheduled maintenance
 
-`close_open_sessions` (intended to run nightly via Celery Beat) flags `WorkSession` rows still open (`konec__isnull=True`) past a threshold (default 14h) by prepending an `[AUTOMATICKY]` note and setting `opraveno=False`. It does the same for open `Pohyb` rows past the threshold (an `[AUTOMATICKY]` note about the missing return time). It never closes anything — it only marks them for manual correction.
+`close_open_sessions` flags `WorkSession` rows still open (`konec__isnull=True`) past a threshold (default 14h) by prepending an `[AUTOMATICKY]` note and setting `opraveno=False`. It does the same for open `Pohyb` rows past the threshold (an `[AUTOMATICKY]` note about the missing return time). It never closes anything — it only marks them for manual correction.
+
+It **is** registered as a nightly Celery Beat `PeriodicTask` (02:00 Europe/Prague) — migration `timetracking/migrations/0006_schedule_close_open_sessions.py` creates the `CrontabSchedule`/`PeriodicTask` rows (idempotently, via `get_or_create`) pointing at `timetracking.tasks.close_open_sessions`, a thin `@shared_task` wrapper that just calls the management command. This makes the schedule active automatically as soon as a Celery worker + beat process actually runs against the database — as of now that's not yet deployed anywhere (dev only), so the task sits registered but idle until it is.

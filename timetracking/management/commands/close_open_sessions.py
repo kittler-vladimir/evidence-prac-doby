@@ -1,7 +1,8 @@
 """
 Management command: close_open_sessions
 Označí zapomenuté otevřené sessions (starší než X hodin) jako vyžadující ruční opravu.
-Spouštět jako Celery beat task každou noc (např. ve 23:59).
+Spouští se přes timetracking.tasks.close_open_sessions jako nightly Celery Beat úloha
+(2:00 Europe/Prague, zaregistrováno migrací 0006_schedule_close_open_sessions).
 """
 from datetime import timedelta
 from django.core.management.base import BaseCommand
@@ -41,7 +42,7 @@ class Command(BaseCommand):
                 session.save(update_fields=["poznamka", "opraveno"])
 
                 self.stdout.write(
-                    f"  ⚠ {session.employee} – session od {session.zacatek:%d.%m.%Y %H:%M} "
+                    f"  ! {session.employee} – session od {session.zacatek:%d.%m.%Y %H:%M} "
                     f"označena k opravě."
                 )
 
@@ -67,7 +68,7 @@ class Command(BaseCommand):
             pohyb.save(update_fields=["poznamka"])
 
             self.stdout.write(
-                f"  ⚠ {pohyb.employee} – pohyb ({pohyb.typ.zkratka}) od "
+                f"  ! {pohyb.employee} – pohyb ({pohyb.typ.zkratka}) od "
                 f"{pohyb.zacatek:%d.%m.%Y %H:%M} označen k opravě."
             )
 

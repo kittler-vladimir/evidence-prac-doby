@@ -6,10 +6,13 @@ from django.test import SimpleTestCase, TestCase, Client
 from django.urls import reverse
 from django.utils import timezone
 
+from django_celery_beat.models import PeriodicTask
+
 from accounts.models import User, Employee, Sekce, Odbor, Oddeleni, TypUvazku, CasovyBlokUvazku
 from timetracking.bilance import format_minut, rozdel_na_tydny, secti
 from timetracking.forms import WorkSessionOpravitForm, PohybRucneForm
 from timetracking.models import WorkSession, WorkdaySummary, TypPohybu, Pohyb
+from timetracking.tasks import close_open_sessions as close_open_sessions_task
 
 
 def vytvor_zamestnance(email="zamestnanec@example.com", osobni_cislo="0001"):
@@ -954,3 +957,38 @@ class MistniCasOpravFormularuAStrTests(TestCase):
             zacatek=self.zacatek_cest_utc, konec=self.konec_cest_utc,
         )
         self.assertIn("15.06.2026 14:00 – 16:30", str(pohyb))
+
+
+class ScheduleCloseOpenSessionsTests(TestCase):
+    """Issue #49 — close_open_sessions je zaregistrovaný jako nightly Celery Beat
+    úloha (migrace 0006) a jeho task obal skutečně volá management příkaz."""
+
+    def test_periodictask_je_zaregistrovana_migraci(self):
+        """Migrace 0006 se aplikuje i na testovací DB (Django migruje testovací
+        DB od nuly), takže úloha tu musí existovat bez jakéhokoliv setUp."""
+        ulohy = PeriodicTask.objects.filter(task="timetracking.tasks.close_open_sessions")
+        self.assertEqual(ulohy.count(), 1)
+        uloha = ulohy.get()
+        self.assertTrue(uloha.enabled)
+        self.assertEqual(uloha.crontab.hour, "2")
+        self.assertEqual(uloha.crontab.minute, "0")
+        self.assertEqual(uloha.crontab.timezone.key, "Europe/Prague")
+
+    def test_task_oznaci_stary_otevreny_blok(self):
+        employee = vytvor_zamestnance()
+        stara_session = WorkSession.objects.create(
+            employee=employee, zacatek=timezone.now() - timedelta(hours=20),
+        )
+        close_open_sessions_task()  # přímé volání, ne .delay() — bez brokeru
+        stara_session.refresh_from_db()
+        self.assertTrue(stara_session.poznamka.startswith("[AUTOMATICKY]"))
+        self.assertFalse(stara_session.opraveno)
+
+    def test_task_neoznaci_cerstvy_otevreny_blok(self):
+        employee = vytvor_zamestnance()
+        cerstva_session = WorkSession.objects.create(
+            employee=employee, zacatek=timezone.now() - timedelta(hours=1),
+        )
+        close_open_sessions_task()
+        cerstva_session.refresh_from_db()
+        self.assertEqual(cerstva_session.poznamka, "")
