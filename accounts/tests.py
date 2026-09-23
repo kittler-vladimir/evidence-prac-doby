@@ -374,3 +374,39 @@ class ZastupceTests(TestCase):
 
         self.jana.refresh_from_db()
         self.assertIsNone(self.jana.zastupce_id)
+
+
+class AdministraceOdkazVNavbaruTests(TestCase):
+    """Issue #45 — odkaz na Django admin v dropdownu navbaru, jen pro is_staff."""
+
+    def test_staff_bez_employee_vidi_odkaz_na_administraci(self):
+        staff_user = User.objects.create_user(
+            username="staff@example.com", email="staff@example.com",
+            password="testpass123", is_staff=True,
+        )
+        client = Client()
+        client.force_login(staff_user)
+        response = client.get(reverse("accounts:home"))
+        self.assertContains(response, "Administrace")
+        self.assertContains(response, reverse("admin:index"))
+
+    def test_nestaff_s_employee_nevidi_odkaz_na_administraci(self):
+        sekce = Sekce.objects.create(nazev="Sekce", kod="S-ADM")
+        odbor = Odbor.objects.create(sekce=sekce, nazev="Odbor", kod="O-ADM")
+        oddeleni = Oddeleni.objects.create(odbor=odbor, nazev="Oddeleni", kod="OD-ADM")
+        typ_uvazku = TypUvazku.objects.create(nazev="Plny", hodiny_denne=8, hodiny_tyydne=40)
+        zamestnanec = _vytvor_zamestnance("zam@example.com", "A1", oddeleni, typ_uvazku)
+        client = Client()
+        client.force_login(zamestnanec.user)
+        response = client.get(reverse("accounts:home"))
+        self.assertNotContains(response, "Administrace")
+
+    def test_nestaff_bez_employee_nevidi_odkaz_na_administraci(self):
+        user = User.objects.create_user(
+            username="bezprofilu@example.com", email="bezprofilu@example.com",
+            password="testpass123",
+        )
+        client = Client()
+        client.force_login(user)
+        response = client.get(reverse("accounts:home"))
+        self.assertNotContains(response, "Administrace")
