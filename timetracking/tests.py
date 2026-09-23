@@ -188,6 +188,92 @@ class PruznaPracovniDobaPohybTests(TestCase):
         self.assertEqual(souhrn.pohyby_minuty, 0)
 
 
+class PevnaPracovniDobaVypocetTests(TestCase):
+    """Issue #47 — u pevné pracovní doby se odpracovaná doba ořízne na časové
+    bloky zaškrtnuté pro daný den v týdnu; mimo blok se nepočítá nic (ani jako
+    práce, ani jako přesčas/nedostatek) a pohyby se nikdy neodečítají."""
+
+    def setUp(self):
+        self.employee = vytvor_zamestnance()
+        self.employee.typ_uvazku.druh_pracovni_doby = TypUvazku.DruhPracovniDoby.PEVNA
+        self.employee.typ_uvazku.save()
+        dnes = timezone.localdate()
+        self.pondeli = dnes - timedelta(days=dnes.weekday())
+        self.patek = self.pondeli + timedelta(days=4)
+        self.sobota = self.pondeli + timedelta(days=5)
+        # Přesně scénář ze zadání: po-čt jeden (delší) blok, pátek kratší blok.
+        CasovyBlokUvazku.objects.create(
+            typ_uvazku=self.employee.typ_uvazku,
+            blok_od="07:30", blok_do="16:15",
+            pondeli=True, utery=True, streda=True, ctvrtek=True,
+        )
+        CasovyBlokUvazku.objects.create(
+            typ_uvazku=self.employee.typ_uvazku,
+            blok_od="07:30", blok_do="15:00",
+            patek=True,
+        )
+
+    @staticmethod
+    def _cas(datum, hodina, minuta=0):
+        return timezone.make_aware(datetime.combine(datum, time(hodina, minuta)))
+
+    def test_cas_mimo_blok_se_neodecita(self):
+        WorkSession.objects.create(
+            employee=self.employee,
+            zacatek=self._cas(self.pondeli, 7, 0),
+            konec=self._cas(self.pondeli, 17, 0),
+        )
+        souhrn = WorkdaySummary.prepocitej(self.employee, self.pondeli)
+        self.assertEqual(souhrn.hrube_minuty, 525)  # jen 07:30–16:15, ne celých 10h
+        self.assertEqual(souhrn.prestavka_minuty, 30)
+        self.assertEqual(souhrn.odpracovane_minuty, 495)
+
+    def test_den_bez_zadaneho_bloku_da_nulu(self):
+        WorkSession.objects.create(
+            employee=self.employee,
+            zacatek=self._cas(self.sobota, 9, 0),
+            konec=self._cas(self.sobota, 12, 0),
+        )
+        souhrn = WorkdaySummary.prepocitej(self.employee, self.sobota)
+        self.assertEqual(souhrn.hrube_minuty, 0)
+        self.assertEqual(souhrn.odpracovane_minuty, 0)
+
+    def test_patecni_blok_je_kratsi_nez_v_tydnu(self):
+        WorkSession.objects.create(
+            employee=self.employee,
+            zacatek=self._cas(self.patek, 7, 30),
+            konec=self._cas(self.patek, 15, 0),
+        )
+        souhrn = WorkdaySummary.prepocitej(self.employee, self.patek)
+        self.assertEqual(souhrn.hrube_minuty, 450)  # 7h30min, ne 8h45min jako po-čt
+        self.assertEqual(souhrn.odpracovane_minuty, 420)
+
+    def test_pohyb_uvnitr_bloku_se_nikdy_neodecita(self):
+        """Na rozdíl od pružné pracovní doby se u pevné pohyby neodečítají
+        vůbec — bez ohledu na TypPohybu.zapocitava_se_do_pracovni_doby."""
+        typ = TypPohybu.objects.create(
+            nazev="Oběd", zkratka="OB", zapocitava_se_do_pracovni_doby=False,
+        )
+        session = WorkSession.objects.create(
+            employee=self.employee,
+            zacatek=self._cas(self.pondeli, 7, 30),
+            konec=self._cas(self.pondeli, 16, 15),
+        )
+        Pohyb.objects.create(
+            work_session=session, typ=typ,
+            zacatek=self._cas(self.pondeli, 12, 0),
+            konec=self._cas(self.pondeli, 12, 30),
+        )
+        souhrn = WorkdaySummary.prepocitej(self.employee, self.pondeli)
+        self.assertEqual(souhrn.pohyby_minuty, 0)
+        self.assertEqual(souhrn.odpracovane_minuty, 495)
+
+    def test_den_bez_session_neni_ovlivnen(self):
+        souhrn = WorkdaySummary.prepocitej(self.employee, self.pondeli)
+        self.assertEqual(souhrn.hrube_minuty, 0)
+        self.assertEqual(souhrn.odpracovane_minuty, 0)
+
+
 class ClockOutBlockedByOpenPohybTests(TestCase):
     def setUp(self):
         self.employee = vytvor_zamestnance()

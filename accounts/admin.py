@@ -60,6 +60,14 @@ class CasovyBlokUvazkuFormSet(BaseInlineFormSet):
                 "Pružná pracovní doba smí mít jen jeden časový blok (jádrovou dobu)."
             )
 
+        if self.instance.druh_pracovni_doby == TypUvazku.DruhPracovniDoby.PEVNA:
+            for form in aktivni_bloky:
+                if not any(form.cleaned_data.get(den) for den in CasovyBlokUvazku.DNY_V_TYDNU):
+                    raise ValidationError(
+                        "Blok pevné pracovní doby musí mít zaškrtnutý aspoň jeden den — "
+                        "jinak se pro žádný den nepoužije."
+                    )
+
 
 class CasovyBlokUvazkuInline(admin.TabularInline):
     model = CasovyBlokUvazku
