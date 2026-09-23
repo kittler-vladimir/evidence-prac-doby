@@ -139,11 +139,14 @@ class TypUvazku(models.Model):
         default=DruhPracovniDoby.PRUZNA,
         help_text=_(
             "Pružná: jeden časový blok (jádrová doba). Pevná: jeden nebo "
-            "více závazných časových bloků. Jádrová doba pružného úvazku "
-            "se využívá při výpočtu odpracované doby u pohybů s příznakem "
-            "„započítává se u pružné pracovní doby“. Jinak jsou bloky zatím "
-            "jen evidence — příchody a odchody se vůči nim nekontrolují a "
-            "bloky pevné pracovní doby nevyužívá žádný výpočet."
+            "více závazných časových bloků, každý se zaškrtnutými dny v "
+            "týdnu, kdy platí. Jádrová doba pružného úvazku se využívá při "
+            "výpočtu odpracované doby u pohybů s příznakem „započítává se "
+            "u pružné pracovní doby“. U pevné pracovní doby se odpracovaná "
+            "doba ořízne na bloky platné pro daný den — den bez "
+            "zaškrtnutého bloku dá 0 odpracovaných minut. Příchody a "
+            "odchody se vůči blokům nekontrolují, jen se podle nich počítá "
+            "odpracovaná doba."
         ),
     )
     aktivni = models.BooleanField(_("aktivní"), default=True)
@@ -173,6 +176,23 @@ class CasovyBlokUvazku(models.Model):
     )
     blok_od = models.TimeField(_("od"))
     blok_do = models.TimeField(_("do"))
+
+    # Dny v týdnu, kdy blok platí — jen u pevné pracovní doby (viz
+    # WorkdaySummary.prepocitej()): odpracovaná doba se ten den ořízne na
+    # průnik se všemi bloky zaškrtnutými pro daný den; den bez zaškrtnutého
+    # bloku znamená 0 odpracovaných minut. U pružné pracovní doby (jádro) se
+    # tyto příznaky nevyužívají — jádro platí bez ohledu na den v týdnu.
+    pondeli = models.BooleanField(_("pondělí"), default=False)
+    utery = models.BooleanField(_("úterý"), default=False)
+    streda = models.BooleanField(_("středa"), default=False)
+    ctvrtek = models.BooleanField(_("čtvrtek"), default=False)
+    patek = models.BooleanField(_("pátek"), default=False)
+    sobota = models.BooleanField(_("sobota"), default=False)
+    nedele = models.BooleanField(_("neděle"), default=False)
+
+    #: Pořadí odpovídá date.weekday() (0=pondělí…6=neděle) — použito v
+    #: WorkdaySummary.prepocitej() k výběru příznaku pro daný den.
+    DNY_V_TYDNU = ["pondeli", "utery", "streda", "ctvrtek", "patek", "sobota", "nedele"]
 
     class Meta:
         verbose_name = _("časový blok pracovní doby")

@@ -331,34 +331,57 @@ class WorkdaySummary(models.Model):
             konec__isnull=False,
         )
 
-        hrube_minuty = sum(s.trvani_minut() or 0 for s in sessions)
-
-        # Pohyby, jejichž typ se nezapočítává do pracovní doby, se odečtou
-        # stejně jako povinná přestávka. Jen dokončené pohyby v už uzavřených
-        # blocích — probíhající pohyb i probíhající blok mají neznámou/ještě
-        # nezapočítanou délku, přepočet proběhne znovu při jejich uzavření.
-        # Bez podmínky na work_session__konec by pohyb v ještě otevřeném
-        # bloku odečítal čas z jiných, už uzavřených bloků téhož dne.
-        zavrene_pohyby = Pohyb.objects.filter(
-            work_session__employee=employee,
-            work_session__zacatek__date=datum,
-            work_session__konec__isnull=False,
-            konec__isnull=False,
-        )
-
-        pohyby_minuty = sum(
-            p.trvani_minut() or 0
-            for p in zavrene_pohyby.filter(typ__zapocitava_se_do_pracovni_doby=False)
-        )
-
-        # U pružné pracovní doby se pohyby označené „započítává se u pružné
-        # pracovní doby“ počítají do odpracované doby jen v jádrové (pevné)
-        # části úvazku — část mimo jádro se odečte stejně jako běžný pohyb.
-        je_pruzna = (
+        je_pevna = (
             employee.typ_uvazku.druh_pracovni_doby
-            == TypUvazku.DruhPracovniDoby.PRUZNA
+            == TypUvazku.DruhPracovniDoby.PEVNA
         )
-        if je_pruzna:
+
+        if je_pevna:
+            # U pevné pracovní doby se počítá jen čas ležící uvnitř bloků
+            # zaškrtnutých pro daný den v týdnu — den bez zaškrtnutého bloku
+            # dá 0 minut, i když WorkSession existuje (čas mimo blok se
+            # nezapočítá ani jako práce, ani jako přesčas/nedostatek).
+            # Pohyby (oběd, lékař...) se tu nikdy neodečítají — na rozdíl od
+            # pružné pracovní doby je odpracovaná doba čistě dána tím, co
+            # spadá do bloku, ne skutečně stráveným časem minus přestávky.
+            den_pole = CasovyBlokUvazku.DNY_V_TYDNU[datum.weekday()]
+            bloky_dne = CasovyBlokUvazku.objects.filter(
+                typ_uvazku=employee.typ_uvazku, **{den_pole: True}
+            )
+            hrube_minuty = 0
+            for s in sessions:
+                for blok in bloky_dne:
+                    blok_od = timezone.make_aware(datetime.combine(datum, blok.blok_od))
+                    blok_do = timezone.make_aware(datetime.combine(datum, blok.blok_do))
+                    prekryv_od = max(s.zacatek, blok_od)
+                    prekryv_do = min(s.konec, blok_do)
+                    if prekryv_do > prekryv_od:
+                        hrube_minuty += int((prekryv_do - prekryv_od).total_seconds() // 60)
+            pohyby_minuty = 0
+        else:
+            hrube_minuty = sum(s.trvani_minut() or 0 for s in sessions)
+
+            # Pohyby, jejichž typ se nezapočítává do pracovní doby, se odečtou
+            # stejně jako povinná přestávka. Jen dokončené pohyby v už uzavřených
+            # blocích — probíhající pohyb i probíhající blok mají neznámou/ještě
+            # nezapočítanou délku, přepočet proběhne znovu při jejich uzavření.
+            # Bez podmínky na work_session__konec by pohyb v ještě otevřeném
+            # bloku odečítal čas z jiných, už uzavřených bloků téhož dne.
+            zavrene_pohyby = Pohyb.objects.filter(
+                work_session__employee=employee,
+                work_session__zacatek__date=datum,
+                work_session__konec__isnull=False,
+                konec__isnull=False,
+            )
+
+            pohyby_minuty = sum(
+                p.trvani_minut() or 0
+                for p in zavrene_pohyby.filter(typ__zapocitava_se_do_pracovni_doby=False)
+            )
+
+            # U pružné pracovní doby se pohyby označené „započítává se u pružné
+            # pracovní doby“ počítají do odpracované doby jen v jádrové (pevné)
+            # části úvazku — část mimo jádro se odečte stejně jako běžný pohyb.
             jadro = CasovyBlokUvazku.objects.filter(
                 typ_uvazku=employee.typ_uvazku
             ).first()

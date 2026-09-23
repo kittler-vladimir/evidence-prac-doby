@@ -2,12 +2,15 @@ from datetime import date, timedelta
 
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
+from django.forms import inlineformset_factory
 from django.test import Client, TestCase
 from django.urls import reverse
 from django.utils import timezone
 
+from accounts.admin import CasovyBlokUvazkuFormSet
 from accounts.models import (
-    Employee, Funkce, HistoriePrislusenosti, Oddeleni, Odbor, Sekce, TypUvazku,
+    CasovyBlokUvazku, Employee, Funkce, HistoriePrislusenosti, Oddeleni, Odbor,
+    Sekce, TypUvazku,
 )
 from leaves.models import TypStavu, ZadostOStav, ZustatekStavu
 from timetracking.models import WorkSession, WorkdaySummary
@@ -410,3 +413,44 @@ class AdministraceOdkazVNavbaruTests(TestCase):
         client.force_login(user)
         response = client.get(reverse("accounts:home"))
         self.assertNotContains(response, "Administrace")
+
+
+class CasovyBlokUvazkuValidaceTests(TestCase):
+    """Issue #47 — blok pevné pracovní doby musí mít zaškrtnutý aspoň jeden den,
+    jinak by se pro žádný den nepoužil. Pružná pracovní doba (max 1 blok) je beze
+    změny — testováno jinde, tady jen nová PEVNA validace."""
+
+    FormSet = inlineformset_factory(
+        TypUvazku, CasovyBlokUvazku, formset=CasovyBlokUvazkuFormSet,
+        fields=["blok_od", "blok_do"] + CasovyBlokUvazku.DNY_V_TYDNU,
+        extra=1, can_delete=True,
+    )
+
+    def setUp(self):
+        self.typ_pevny = TypUvazku.objects.create(
+            nazev="Pevny", hodiny_denne=8, hodiny_tyydne=40,
+            druh_pracovni_doby=TypUvazku.DruhPracovniDoby.PEVNA,
+        )
+
+    @staticmethod
+    def _data(**extra):
+        data = {
+            "casove_bloky-TOTAL_FORMS": "1",
+            "casove_bloky-INITIAL_FORMS": "0",
+            "casove_bloky-MIN_NUM_FORMS": "0",
+            "casove_bloky-MAX_NUM_FORMS": "1000",
+            "casove_bloky-0-blok_od": "07:30",
+            "casove_bloky-0-blok_do": "16:15",
+        }
+        data.update(extra)
+        return data
+
+    def test_pevny_blok_bez_zaskrtnuteho_dne_je_odmitnut(self):
+        formset = self.FormSet(self._data(), instance=self.typ_pevny)
+        self.assertFalse(formset.is_valid())
+
+    def test_pevny_blok_se_zaskrtnutym_dnem_projde(self):
+        formset = self.FormSet(
+            self._data(**{"casove_bloky-0-pondeli": "on"}), instance=self.typ_pevny
+        )
+        self.assertTrue(formset.is_valid(), formset.errors)
