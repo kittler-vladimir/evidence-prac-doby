@@ -93,6 +93,11 @@ nastaven). Vypočítává `Employee.get_schvalovatel()`.
   `TypPohybu`, který určuje, zda se doba pohybu započítává do odpracované
   doby, zda zaměstnanec zůstává veden jako přítomný na pracovišti, a zda se
   u pružné pracovní doby započítává jen v rámci jádrové doby.
+- U **pevné pracovní doby** (`TypUvazku.druh_pracovni_doby = PEVNA`) se
+  odpracovaná doba počítá jen v rámci časových bloků (`CasovyBlokUvazku`)
+  zaškrtnutých pro daný den v týdnu — čas mimo blok se nezapočítá vůbec
+  (ani jako práce, ani jako přesčas/nedostatek) a pohyby se u ní neodečítají.
+  Den bez zaškrtnutého bloku dá 0 odpracovaných minut.
 - `WorkdaySummary` je odvozený denní souhrn — nikdy se nezapisuje přímo,
   přepočítá se signálem po každé změně `WorkSession`/`Pohyb`.
 
@@ -130,4 +135,4 @@ nastaven). Vypočítává `Employee.get_schvalovatel()`.
 - [ ] Nastavení hesla při prvním přihlášení (e-mail s tokenem)
 - [ ] 2FA pro přihlášení
 - [ ] API pro terminálové docházkové čtečky (DRF)
-- [ ] Vynucení jádrové doby / časových bloků úvazku (zatím jen evidence)
+- [ ] Upozornění/validace příchodu a odchodu proti časovým blokům úvazku — dnes bloky jen ovlivňují *výpočet* odpracované doby (ořezání u pevné pracovní doby, odečítání pohybů mimo jádro u pružné), příchod/odchod mimo blok systém nijak neomezí ani na něj neupozorní
