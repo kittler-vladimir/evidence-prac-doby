@@ -6,5 +6,6 @@ db.sqlite3
 staticfiles/
 media/
 *.log
+*.bat
 .DS_Store
 .claude/*.lock
