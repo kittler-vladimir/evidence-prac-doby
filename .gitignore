@@ -9,3 +9,6 @@ media/
 *.bat
 .DS_Store
 .claude/*.lock
+.claude/settings.local.json
+.claude/hooks/
+.claude/post-ship-snapshot.json
