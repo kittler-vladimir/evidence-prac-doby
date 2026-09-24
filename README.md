@@ -58,8 +58,23 @@ celery -A config beat -l info
 ```
 
 Celery Beat spouští pravidelně tyto příkazy:
-- `close_open_sessions` — každou noc označí zapomenuté otevřené záznamy (`[AUTOMATICKY]`) k ruční opravě, nezavírá je.
+- `close_open_sessions` — každou noc ve **2:00 (Europe/Prague)** označí zapomenuté otevřené záznamy (`[AUTOMATICKY]`) k ruční opravě, nezavírá je. Naplánováno jako `PeriodicTask` (`timetracking.tasks.close_open_sessions`), zaregistrováno migrací `timetracking/migrations/0006_schedule_close_open_sessions.py` — funguje automaticky, jakmile běží worker i beat, není potřeba nic nastavovat ručně v adminu.
 - `obnov_rocni_naroky` — každý 1. leden převede zůstatky dovolené/indispozičního volna do nového roku.
+
+### Ruční spuštění `close_open_sessions`
+
+Bez čekání na noční běh (nebo bez rozeběhnutého Celery workeru/beatu vůbec) jde spustit přímo:
+
+```bash
+# přes management command (výchozí práh 14 hodin)
+python manage.py close_open_sessions
+python manage.py close_open_sessions --hodiny 12   # jiný práh
+
+# nebo přes Celery task obal (stejný efekt)
+python manage.py shell -c "from timetracking.tasks import close_open_sessions; close_open_sessions()"
+```
+
+> Na Windows může výstup s diakritikou vypadat rozbitě (`stdout` bere kódování z konzolové codepage, ne UTF-8) — pomůže `export PYTHONIOENCODING=utf-8` (Git Bash) před spuštěním.
 
 ## Organizační hierarchie
 
