@@ -3,12 +3,14 @@ from decimal import Decimal
 
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
+from django.core.management import call_command
 from django.test import TestCase
 from django.urls import reverse
 
 from accounts.models import Employee, Oddeleni, Odbor, Sekce, TypUvazku
 from leaves.forms import ZadostOStavForm
 from leaves.models import (
+    NarokDovolene,
     NarokIndispozicnihoVolna,
     TypStavu,
     ZadostOStav,
@@ -238,3 +240,71 @@ class SamoZaznamTestCase(TestCase):
         self.assertEqual(response.status_code, 200)
         zadosti = list(response.context["zadosti"])
         self.assertEqual(zadosti, [zadost_dovolena])
+
+
+class ObnovRocniNarokyTests(TestCase):
+    """Indispoziční volno se při ročním obnovení NEPŘEVÁDÍ (žádný zbytek z
+    minulého roku) — nový zůstatek se rovnou nastaví na aktuální nárokovou
+    hodnotu z NarokIndispozicnihoVolna. Dovolená naproti tomu zbytek převádí
+    a k němu připočítává nový roční nárok."""
+
+    def setUp(self):
+        sekce = Sekce.objects.create(nazev="Sekce", kod="S1")
+        odbor = Odbor.objects.create(sekce=sekce, nazev="Odbor", kod="O1")
+        oddeleni = Oddeleni.objects.create(odbor=odbor, nazev="Oddělení", kod="OD1")
+        typ_uvazku = TypUvazku.objects.create(
+            nazev="Plný úvazek", hodiny_denne=Decimal("8.00"), hodiny_tyydne=Decimal("40.00")
+        )
+        user = User.objects.create_user(
+            username="jan@example.com", email="jan@example.com",
+            first_name="Jan", last_name="Novák",
+        )
+        self.employee = Employee.objects.create(
+            user=user, osobni_cislo="1", oddeleni=oddeleni,
+            typ_uvazku=typ_uvazku, datum_nastupu=date(2020, 1, 1),
+        )
+
+        self.typ_iv = TypStavu.objects.create(
+            nazev="Indispoziční volno", zkratka="IV",
+            odecita_ze_zustatku=True, je_indispozicni_volno=True,
+            kategorie_pro_prehled=TypStavu.KategoriePrehled.INDISPOZICNI_VOLNO,
+        )
+        self.typ_dov = TypStavu.objects.create(
+            nazev="Dovolená", zkratka="DOV",
+            odecita_ze_zustatku=True, je_dovolena=True,
+            kategorie_pro_prehled=TypStavu.KategoriePrehled.DOVOLENA,
+        )
+
+        NarokIndispozicnihoVolna.objects.create(hodin=Decimal("50.00"), platne_od=date(2020, 1, 1))
+        NarokDovolene.objects.create(hodin=Decimal("160.00"), platne_od=date(2020, 1, 1))
+
+        ZustatekStavu.objects.create(
+            employee=self.employee, rok=2025, typ=self.typ_iv,
+            narok_hodin=Decimal("40.00"), cerpano_hodin=Decimal("15.00"),
+        )
+        ZustatekStavu.objects.create(
+            employee=self.employee, rok=2025, typ=self.typ_dov,
+            narok_hodin=Decimal("160.00"), cerpano_hodin=Decimal("100.00"),
+        )
+
+    def test_indispozicni_volno_se_nastavi_na_narokovou_hodnotu_bez_prevodu_zbytku(self):
+        call_command("obnov_rocni_naroky", rok=2026)
+        zustatek = ZustatekStavu.objects.get(employee=self.employee, rok=2026, typ=self.typ_iv)
+        # Loňský zbytek byl 40-15=25h. Nový nárok musí být přesně 50h (aktuální
+        # NarokIndispozicnihoVolna), ne 25h (jen zbytek) ani 75h (zbytek + nárok).
+        self.assertEqual(zustatek.narok_hodin, Decimal("50.00"))
+
+    def test_dovolena_prevede_zbytek_a_pricte_novy_rocni_narok(self):
+        call_command("obnov_rocni_naroky", rok=2026)
+        zustatek = ZustatekStavu.objects.get(employee=self.employee, rok=2026, typ=self.typ_dov)
+        # Loňský zbytek 160-100=60h + nový roční nárok 160h = 220h.
+        self.assertEqual(zustatek.narok_hodin, Decimal("220.00"))
+
+    def test_je_idempotentni_neprepise_uz_existujici_zustatek(self):
+        ZustatekStavu.objects.create(
+            employee=self.employee, rok=2026, typ=self.typ_iv,
+            narok_hodin=Decimal("99.00"),
+        )
+        call_command("obnov_rocni_naroky", rok=2026)
+        zustatek = ZustatekStavu.objects.get(employee=self.employee, rok=2026, typ=self.typ_iv)
+        self.assertEqual(zustatek.narok_hodin, Decimal("99.00"))
