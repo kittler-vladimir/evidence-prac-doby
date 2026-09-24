@@ -4,7 +4,7 @@
 - **Django 5.0** + PostgreSQL (lze spustit i proti SQLite pro lokální vývoj bez PostgreSQL serveru)
 - **Celery** + Redis (noční úlohy — označení zapomenutých odpíchnutí)
 - **Bootstrap 5** (server-rendered šablony)
-- **openpyxl** (export do Excelu), **weasyprint** (PDF)
+- **openpyxl** (export do Excelu) — `weasyprint` je v `requirements.txt`, ale zatím ho nepoužívá žádný kód (žádný PDF export zatím neexistuje)
 
 ## Struktura projektu
 
@@ -118,14 +118,15 @@ nastaven). Vypočítává `Employee.get_schvalovatel()`.
 |----------|---------|
 | Povinná přestávka po | 6 hodinách práce |
 | Délka přestávky | 30 minut (neplatí do odpracované doby) |
-| Přesčas | odpracováno nad rámec denního úvazku |
+| Přesčas / nedostatek | `prescos_minuty` je podepsaná bilance (odpracováno − denní norma); kladné dny se zobrazují jako přesčas, záporné jako nedostatek — vždy zvlášť, nikdy neseskládané do jednoho čísla |
 | Dovolená a další stavy | evidovány v hodinách (dny × hodin denně dle úvazku) |
 | Státní svátky | generovány z knihovny `holidays`, admin může upravit |
 
 ## Administrace
 
 - Django admin (`/admin/`) — správa org. struktury, svátků, úvazků, číselníků;
-  zaměstnance lze vytvořit i smazat přímo z formuláře uživatele.
+  zaměstnance lze vytvořit i smazat přímo z formuláře uživatele. Pro `is_staff`
+  uživatele je odkaz i v horní liště (dropdown se jménem).
 - Vlastní web UI (namespace `accounts`, `timetracking`, `leaves`, `reports`,
   namontováno v `config/urls.py`) — zaměstnanci, docházka, žádosti, přehledy.
 
