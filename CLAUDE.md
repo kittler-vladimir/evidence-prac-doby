@@ -38,6 +38,8 @@ celery -A config beat -l info
 
 A dev-server launch config exists at `.claude/launch.json` (`django-dev-server`, port **8010** — not 8000, since another unrelated local project was found squatting on port 8000 on this machine).
 
+**Console encoding on this Windows machine**: Python's `sys.stdout.encoding` defaults to `cp1250` (the console codepage), not UTF-8. Czech diacritics in `manage.py` output show up as mojibake in Git Bash, and any character outside cp1250 (e.g. an emoji in a management command's `self.stdout.write()`) crashes the command with `UnicodeEncodeError` — this is what broke `close_open_sessions` until #49. Prefix commands with `PYTHONIOENCODING=utf-8` (also exported in `~/.bashrc`, but a non-interactive shell may not source it), and keep management-command output to cp1250-safe characters.
+
 ## Architecture
 
 Four Django apps under `config/` (settings/urls/celery root), wired together through `accounts.Employee`:
