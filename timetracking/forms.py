@@ -85,19 +85,8 @@ class WorkSessionRucneForm(forms.ModelForm):
         if zacatek and konec and konec <= zacatek:
             raise forms.ValidationError("Konec musí být po začátku.")
 
-        # Kontrola překryvu
-        if zacatek and konec and self.employee:
-            qs = WorkSession.objects.filter(
-                employee=self.employee,
-                zacatek__lt=konec,
-                konec__gt=zacatek,
-            )
-            if self.instance.pk:
-                qs = qs.exclude(pk=self.instance.pk)
-            if qs.exists():
-                raise forms.ValidationError(
-                    "Tento časový blok se překrývá s existujícím záznamem."
-                )
+        # Překryv s jiným blokem kontroluje WorkSession.clean() (volá ho full_clean()
+        # uvnitř is_valid()) — vlastní kontrola tady by hlášku zobrazila dvakrát.
         return cleaned
 
 

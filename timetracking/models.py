@@ -7,6 +7,19 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 
 
+def popis_intervalu(zacatek, konec):
+    """Časový úsek v místním čase pro chybové hlášky, např. "22. 9. 7:59–13:14"
+    nebo "21. 9. 6:39 – 22. 9. 7:59" přes půlnoc; otevřený konec jako "(probíhá)"."""
+    od = timezone.localtime(zacatek)
+    text_od = f"{od.day}. {od.month}. {od.hour}:{od.minute:02d}"
+    if konec is None:
+        return f"{text_od} – (probíhá)"
+    do = timezone.localtime(konec)
+    if do.date() == od.date():
+        return f"{text_od}–{do.hour}:{do.minute:02d}"
+    return f"{text_od} – {do.day}. {do.month}. {do.hour}:{do.minute:02d}"
+
+
 class WorkSession(models.Model):
     """
     Jeden pracovní blok zaměstnance (příchod → odchod).
@@ -87,12 +100,14 @@ class WorkSession(models.Model):
                 qs = qs.exclude(pk=self.pk)
 
             konec_filter = self.konec or timezone.now()
-            if qs.filter(
+            kolize = qs.filter(
                 zacatek__lt=konec_filter,
                 konec__gt=self.zacatek,
-            ).exists():
+            ).order_by("zacatek").first()
+            if kolize:
                 raise ValidationError(
-                    _("Tento časový blok se překrývá s existujícím záznamem.")
+                    _("Tento časový blok se překrývá s blokem %(blok)s."),
+                    params={"blok": popis_intervalu(kolize.zacatek, kolize.konec)},
                 )
 
     @property
@@ -232,12 +247,17 @@ class Pohyb(models.Model):
                 qs = qs.exclude(pk=self.pk)
 
             konec_filter = self.konec or timezone.now()
-            if qs.filter(
+            kolize = qs.filter(
                 models.Q(konec__isnull=True) | models.Q(konec__gt=self.zacatek),
                 zacatek__lt=konec_filter,
-            ).exists():
+            ).select_related("typ").order_by("zacatek").first()
+            if kolize:
                 raise ValidationError(
-                    _("Tento pohyb se překrývá s jiným pohybem ve stejném bloku.")
+                    _("Tento pohyb se překrývá s pohybem %(typ)s %(cas)s ve stejném bloku."),
+                    params={
+                        "typ": kolize.typ.nazev,
+                        "cas": popis_intervalu(kolize.zacatek, kolize.konec),
+                    },
                 )
 
 
