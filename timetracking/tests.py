@@ -1,7 +1,9 @@
 import re
 from datetime import date, datetime, time, timedelta, timezone as dt_timezone
+from io import StringIO
 
 from django.core.exceptions import ValidationError
+from django.core.management import call_command
 from django.test import SimpleTestCase, TestCase, Client
 from django.urls import reverse
 from django.utils import timezone
@@ -992,3 +994,53 @@ class ScheduleCloseOpenSessionsTests(TestCase):
         close_open_sessions_task()
         cerstva_session.refresh_from_db()
         self.assertEqual(cerstva_session.poznamka, "")
+
+
+class CloseOpenSessionsOznaceniTests(TestCase):
+    """Issue #55 — close_open_sessions vypisuje místní (ne UTC) čas a stejný
+    neopravený záznam neoznačuje znovu při každém dalším běhu."""
+
+    def setUp(self):
+        self.employee = vytvor_zamestnance()
+        self.typ = TypPohybu.objects.create(nazev="Oběd", zkratka="OB")
+        self.session = WorkSession.objects.create(
+            employee=self.employee,
+            zacatek=(timezone.now() - timedelta(hours=20)).replace(second=0, microsecond=0),
+            poznamka="vlastní poznámka",
+        )
+
+    @staticmethod
+    def _spust():
+        out = StringIO()
+        call_command("close_open_sessions", stdout=out)
+        return out.getvalue()
+
+    def test_druhy_beh_session_neoznaci_znovu(self):
+        self._spust()
+        self._spust()
+        self.session.refresh_from_db()
+        self.assertEqual(self.session.poznamka.count("[AUTOMATICKY]"), 1)
+        self.assertTrue(self.session.poznamka.endswith("vlastní poznámka"))
+
+    def test_druhy_beh_pohyb_neoznaci_znovu(self):
+        pohyb = Pohyb.objects.create(
+            work_session=self.session, typ=self.typ,
+            zacatek=self.session.zacatek + timedelta(hours=1),
+        )
+        self._spust()
+        self._spust()
+        pohyb.refresh_from_db()
+        self.assertEqual(pohyb.poznamka.count("[AUTOMATICKY]"), 1)
+
+    def test_druhy_beh_vypise_drive_oznacenou_session_jako_cekajici(self):
+        self._spust()
+        vystup = self._spust()
+        self.assertIn("stále čeká na opravu", vystup)
+        self.assertIn("Žádné nové otevřené sessions k označení.", vystup)
+
+    def test_vypis_pouziva_mistni_cas_ne_utc(self):
+        vystup = self._spust()
+        mistni = timezone.localtime(self.session.zacatek).strftime("%d.%m.%Y %H:%M")
+        utc = self.session.zacatek.astimezone(dt_timezone.utc).strftime("%d.%m.%Y %H:%M")
+        self.assertIn(mistni, vystup)
+        self.assertNotIn(utc, vystup)
