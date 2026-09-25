@@ -13,8 +13,8 @@ from django_celery_beat.models import PeriodicTask
 from accounts.models import User, Employee, Funkce, Sekce, Odbor, Oddeleni, TypUvazku, CasovyBlokUvazku
 from timetracking.opravy import ZNACKA_POHYB, ZNACKA_SESSION, zaznamy_k_oprave
 from timetracking.bilance import format_minut, rozdel_na_tydny, secti
-from timetracking.forms import WorkSessionOpravitForm, PohybRucneForm
-from timetracking.models import WorkSession, WorkdaySummary, TypPohybu, Pohyb
+from timetracking.forms import WorkSessionOpravitForm, WorkSessionRucneForm, PohybRucneForm
+from timetracking.models import WorkSession, WorkdaySummary, TypPohybu, Pohyb, popis_intervalu
 from timetracking.tasks import close_open_sessions as close_open_sessions_task
 
 
@@ -329,6 +329,87 @@ class SignalLokalniDatumTests(TestCase):
         self.assertEqual(souhrn.hrube_minuty, 0)
         self.assertFalse(
             WorkdaySummary.objects.filter(employee=self.employee, datum=self.predchozi_den).exists()
+        )
+
+
+def mistni(den, hodina, minuta, sekunda=0):
+    return timezone.make_aware(datetime.combine(den, time(hodina, minuta, sekunda)))
+
+
+class PopisIntervaluTests(SimpleTestCase):
+    def test_stejny_den(self):
+        den = date(2026, 9, 22)
+        self.assertEqual(popis_intervalu(mistni(den, 7, 59), mistni(den, 13, 14)), "22. 9. 7:59–13:14")
+
+    def test_pres_pulnoc(self):
+        self.assertEqual(
+            popis_intervalu(mistni(date(2026, 9, 21), 6, 39), mistni(date(2026, 9, 22), 7, 59, 23)),
+            "21. 9. 6:39 – 22. 9. 7:59",
+        )
+
+    def test_otevreny_konec(self):
+        self.assertEqual(popis_intervalu(mistni(date(2026, 9, 22), 8, 5), None), "22. 9. 8:05 – (probíhá)")
+
+    def test_utc_hodnota_se_zobrazi_v_mistnim_case(self):
+        zacatek = mistni(date(2026, 9, 22), 0, 30).astimezone(dt_timezone.utc)
+        self.assertEqual(popis_intervalu(zacatek, zacatek + timedelta(hours=1)), "22. 9. 0:30–1:30")
+
+
+class HlaskaPrekryvuTests(TestCase):
+    """Chybová hláška o překryvu musí říct, s čím se záznam kryje — jinak nejde
+    poznat, že za odmítnutou opravou stojí např. zapomenutý odchod z předchozího dne."""
+
+    def setUp(self):
+        self.employee = vytvor_zamestnance()
+        self.den = date(2026, 9, 22)
+        # Zapomenutý odchod: blok z 21. 9. uzavřený až 22. 9. ráno.
+        self.predchozi = WorkSession.objects.create(
+            employee=self.employee,
+            zacatek=mistni(date(2026, 9, 21), 6, 39, 51),
+            konec=mistni(self.den, 7, 59, 23),
+        )
+        self.session = WorkSession.objects.create(
+            employee=self.employee,
+            zacatek=mistni(self.den, 7, 59, 30),
+            konec=mistni(self.den, 13, 14),
+        )
+
+    def test_oprava_zacatku_jmenuje_kolidujici_blok(self):
+        form = WorkSessionOpravitForm(
+            {"zacatek": "2026-09-22T07:30", "konec": "2026-09-22T13:14", "poznamka": ""},
+            instance=self.session,
+        )
+        self.assertFalse(form.is_valid())
+        self.assertEqual(
+            form.non_field_errors(),
+            ["Tento časový blok se překrývá s blokem 21. 9. 6:39 – 22. 9. 7:59."],
+        )
+
+    def test_rucni_pridani_jmenuje_kolidujici_blok(self):
+        form = WorkSessionRucneForm(
+            {"zacatek": "2026-09-22T12:00", "konec": "2026-09-22T14:00", "poznamka": ""},
+            employee=self.employee,
+        )
+        self.assertFalse(form.is_valid())
+        self.assertEqual(
+            form.non_field_errors(), ["Tento časový blok se překrývá s blokem 22. 9. 7:59–13:14."]
+        )
+
+    def test_prekryv_pohybu_jmenuje_typ_a_cas(self):
+        typ = TypPohybu.objects.create(nazev="Oběd", zkratka="OB")
+        Pohyb.objects.create(
+            work_session=self.session, typ=typ,
+            zacatek=mistni(self.den, 10, 41), konec=mistni(self.den, 11, 34),
+        )
+        prekryvajici = Pohyb(
+            work_session=self.session, typ=typ,
+            zacatek=mistni(self.den, 11, 0), konec=mistni(self.den, 11, 45),
+        )
+        with self.assertRaises(ValidationError) as ctx:
+            prekryvajici.full_clean()
+        self.assertEqual(
+            ctx.exception.messages,
+            ["Tento pohyb se překrývá s pohybem Oběd 22. 9. 10:41–11:34 ve stejném bloku."],
         )
 
 
