@@ -79,9 +79,18 @@
           <td>{{ t.bilance.nedostatek|minuty_hm }}</td>
           <td>Bilance: {{ t.bilance.bilance|minuty_hm_znamenko }}</td>
         </tr>
-        {% empty %}
-        <tr><td colspan="5" class="text-center text-muted py-3">Žádné záznamy.</td></tr>
         {% endfor %}
+        {% if tydny %}
+        <tr class="table-dark fw-bold">
+          <td>Měsíc celkem</td>
+          <td>{{ celkem_odpr|minuty_hm }}</td>
+          <td>{{ celkem.prescas|minuty_hm }}</td>
+          <td>{{ celkem.nedostatek|minuty_hm }}</td>
+          <td>Bilance: {{ celkem.bilance|minuty_hm_znamenko }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5" class="text-center text-muted py-3">Žádné záznamy.</td></tr>
+        {% endif %}
       </tbody>
     </table>
   </div>

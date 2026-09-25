@@ -248,6 +248,22 @@ class PrehledTymuAExportBilanceTestCase(TestCase):
         (radek,) = skupina["radky"]
         self.assertEqual((radek["prescas_minuty"], radek["nedostatek_minuty"]), (45, 90))
 
+    def test_odbor_ukazuje_bilanci_se_znamenkem(self):
+        # Issue #63 — sloupec Bilance vedle Přesčas/Nedostatek, se skutečným
+        # znaménkem "−" (stejný formát jako Výkaz a XLSX export), ne syrové
+        # záporné číslo z issue #34.
+        response = self.client.get(reverse("reports:prehled_tymu"), {"rok": 2026, "mesic": 9})
+
+        (skupina,) = response.context["skupiny"]
+        (radek,) = skupina["radky"]
+        self.assertEqual(radek["bilance_minuty"], 45 - 90)
+
+        obsah = response.content.decode("utf-8")
+        self.assertIn("Bilance", obsah)
+        self.assertIn("−0h 45min", obsah)
+        self.assertNotIn("-0h 45min", obsah)
+        self.assertNotIn("-45min", obsah)
+
     def test_export_xlsx_ma_tydenni_a_mesicni_souhrn_bez_zapornych_hodin(self):
         import openpyxl
         from io import BytesIO
