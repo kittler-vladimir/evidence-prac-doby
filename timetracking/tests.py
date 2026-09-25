@@ -279,6 +279,58 @@ class PevnaPracovniDobaVypocetTests(TestCase):
         self.assertEqual(souhrn.odpracovane_minuty, 0)
 
 
+class SignalLokalniDatumTests(TestCase):
+    """
+    Signály musí přepočítat souhrn lokálního (pražského) dne, ne dne v UTC —
+    blok začínající po půlnoci místního času leží v UTC ještě v předchozím dni.
+    """
+
+    def setUp(self):
+        self.employee = vytvor_zamestnance()
+        self.den = date(2026, 3, 10)  # zimní čas, UTC+1
+        self.predchozi_den = self.den - timedelta(days=1)
+        # 00:30–02:30 v Praze = 23:30–01:30 UTC, začátek tedy v UTC spadá do 9. 3.
+        # V UTC stejně jako timezone.now() v pohledech i hodnoty načtené z DB.
+        self.zacatek = timezone.make_aware(
+            datetime.combine(self.den, time(0, 30))
+        ).astimezone(dt_timezone.utc)
+        self.session = WorkSession.objects.create(
+            employee=self.employee, zacatek=self.zacatek,
+            konec=self.zacatek + timedelta(hours=2),
+        )
+
+    def test_uzavreni_bloku_po_pulnoci_prepocita_lokalni_den(self):
+        self.assertEqual(self.zacatek.date(), self.predchozi_den)
+        souhrn = WorkdaySummary.objects.get(employee=self.employee, datum=self.den)
+        self.assertEqual(souhrn.hrube_minuty, 120)
+        self.assertEqual(souhrn.odpracovane_minuty, 120)
+        self.assertFalse(
+            WorkdaySummary.objects.filter(employee=self.employee, datum=self.predchozi_den).exists()
+        )
+
+    def test_uzavreni_pohybu_prepocita_lokalni_den(self):
+        typ = TypPohybu.objects.create(nazev="Oběd", zkratka="OB")
+        Pohyb.objects.create(
+            work_session=self.session, typ=typ,
+            zacatek=self.zacatek + timedelta(minutes=30),
+            konec=self.zacatek + timedelta(minutes=50),
+        )
+        souhrn = WorkdaySummary.objects.get(employee=self.employee, datum=self.den)
+        self.assertEqual(souhrn.pohyby_minuty, 20)
+        self.assertEqual(souhrn.odpracovane_minuty, 100)
+        self.assertFalse(
+            WorkdaySummary.objects.filter(employee=self.employee, datum=self.predchozi_den).exists()
+        )
+
+    def test_smazani_bloku_prepocita_lokalni_den(self):
+        self.session.delete()
+        souhrn = WorkdaySummary.objects.get(employee=self.employee, datum=self.den)
+        self.assertEqual(souhrn.hrube_minuty, 0)
+        self.assertFalse(
+            WorkdaySummary.objects.filter(employee=self.employee, datum=self.predchozi_den).exists()
+        )
+
+
 class ClockOutBlockedByOpenPohybTests(TestCase):
     def setUp(self):
         self.employee = vytvor_zamestnance()

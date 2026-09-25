@@ -91,7 +91,7 @@ The 5 seeded rows reproduce the pre-refactor hardcoded behavior 1:1, and grant s
 
 ### Recompute-on-save pattern
 
-`WorkdaySummary` is never written directly by views — it's derived. `timetracking/signals.py` listens for `post_save`/`post_delete` on `WorkSession` and calls `WorkdaySummary.prepocitej(employee, date)`, which recalculates gross minutes, mandatory break deduction, net worked minutes, and overtime from scratch for that employee/day. When touching worked-time logic, edit `prepocitej()`, not the views.
+`WorkdaySummary` is never written directly by views — it's derived. `timetracking/signals.py` listens for `post_save`/`post_delete` on `WorkSession` (and `Pohyb`) and calls `WorkdaySummary.prepocitej(employee, date)`, which recalculates gross minutes, mandatory break deduction, net worked minutes, and overtime from scratch for that employee/day. When touching worked-time logic, edit `prepocitej()`, not the views. The `date` passed in must be `timezone.localdate(zacatek)` — the local (Prague) date, matching `prepocitej()`'s own `zacatek__date` filter; a bare `zacatek.date()` gives the UTC date and recomputes the previous day for blocks starting just after local midnight (#58).
 
 ### Quick clock actions and the optional `cas` override
 
