@@ -9,7 +9,11 @@ from django.http import HttpResponseForbidden
 
 from .bilance import rozdel_na_tydny, secti
 from .models import WorkSession, WorkdaySummary, Pohyb, TypPohybu
-from .forms import WorkSessionOpravitForm, WorkSessionRucneForm, PohybRucneForm
+from .forms import PohybOpravitForm, WorkSessionOpravitForm, WorkSessionRucneForm, PohybRucneForm
+from .opravy import (
+    ZNACKA_POHYB, ZNACKA_SESSION, bezpecny_next, je_ze_starsiho_dne, muze_opravovat,
+    odstran_znacku, zaznamy_k_oprave,
+)
 
 
 def _cas_z_pozadavku(request, navazuje_na=None):
@@ -127,10 +131,15 @@ def dashboard(request):
 
     posledni_tydny = WorkdaySummary.objects.filter(employee=employee).order_by("-datum")[:14]
 
+    # Blok otevřený z předchozího dne = zapomenutý odchod: jednoklikový Odchod by
+    # zapsal dnešní čas (blok přes 24 h), proto ho šablona místo tlačítek nabídne k opravě.
+    zapomenuty_blok = bool(aktivni_session and je_ze_starsiho_dne(aktivni_session.zacatek))
+
     context = {
         "employee": employee,
         "aktivni_session": aktivni_session,
         "otevreny_pohyb": otevreny_pohyb,
+        "zapomenuty_blok": zapomenuty_blok,
         "dnesni_pohyby": dnesni_pohyby,
         "typy_pohybu": TypPohybu.objects.filter(aktivni=True),
         "souhrn": souhrn,
@@ -283,17 +292,16 @@ def prehled_mesice(request):
         "mesic": mesic,
         "celkem_odpr": sum(s.odpracovane_minuty for s in souhrny),
         "celkem": secti(souhrny),
+        "zaznamy_k_oprave": zaznamy_k_oprave([employee]),
     }
     return render(request, "timetracking/prehled_mesice.html", context)
 
 
 @login_required
 def opravit_session(request, pk):
-    """Zaměstnanec doplní zapomenutý odchod nebo opraví časy."""
+    """Doplnění zapomenutého odchodu nebo oprava časů bloku (viz opravy.muze_opravovat)."""
     session = get_object_or_404(WorkSession, pk=pk)
-
-    # Zaměstnanec může opravovat jen své záznamy; manager/admin vše
-    if session.employee.user != request.user and not request.user.is_staff:
+    if not muze_opravovat(request.user, session.employee):
         return HttpResponseForbidden()
 
     if request.method == "POST":
@@ -302,13 +310,42 @@ def opravit_session(request, pk):
             obj = form.save(commit=False)
             obj.opraveno = True
             obj.zdroj = WorkSession.Zdroj.RUCNI
+            if obj.konec:
+                obj.poznamka = odstran_znacku(obj.poznamka, ZNACKA_SESSION)
             obj.save()
             messages.success(request, "Záznam byl opraven.")
-            return redirect("timetracking:dashboard")
+            return redirect(bezpecny_next(request))
     else:
         form = WorkSessionOpravitForm(instance=session)
 
-    return render(request, "timetracking/opravit_session.html", {"form": form, "session": session})
+    return render(request, "timetracking/opravit_session.html", {
+        "form": form, "session": session, "next": bezpecny_next(request),
+    })
+
+
+@login_required
+def opravit_pohyb(request, pk):
+    """Doplnění zapomenutého návratu z pohybu nebo oprava jeho časů. Bez toho nejde
+    uzavřít blok, ve kterém pohyb zůstal otevřený (WorkSession.clean())."""
+    pohyb = get_object_or_404(Pohyb.objects.select_related("work_session__employee", "typ"), pk=pk)
+    if not muze_opravovat(request.user, pohyb.work_session.employee):
+        return HttpResponseForbidden()
+
+    if request.method == "POST":
+        form = PohybOpravitForm(request.POST, instance=pohyb)
+        if form.is_valid():
+            obj = form.save(commit=False)
+            if obj.konec:
+                obj.poznamka = odstran_znacku(obj.poznamka, ZNACKA_POHYB)
+            obj.save()
+            messages.success(request, "Pohyb byl opraven.")
+            return redirect(bezpecny_next(request))
+    else:
+        form = PohybOpravitForm(instance=pohyb)
+
+    return render(request, "timetracking/opravit_pohyb.html", {
+        "form": form, "pohyb": pohyb, "next": bezpecny_next(request),
+    })
 
 
 @login_required

@@ -13,4 +13,5 @@ urlpatterns = [
     path("pohyb/zahajit/", views.start_pohyb, name="start_pohyb"),
     path("pohyb/navrat/", views.return_pohyb, name="return_pohyb"),
     path("pohyb/pridat/", views.pridat_pohyb, name="pridat_pohyb"),
+    path("pohyb/opravit/<int:pk>/", views.opravit_pohyb, name="opravit_pohyb"),
 ]

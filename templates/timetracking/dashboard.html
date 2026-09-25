@@ -9,7 +9,30 @@
   <div class="col-md-5">
     <div class="card shadow-sm">
       <div class="card-body text-center py-4">
-        {% if aktivni_session %}
+        {% if zapomenuty_blok %}
+          {# Blok otevřený z předchozího dne: Odchod/pohyby skryté, jinak by se zapsal dnešní čas. #}
+          <div class="mb-3">
+            <i class="bi bi-exclamation-triangle-fill text-warning" style="font-size:3rem"></i>
+          </div>
+          <h5 class="text-warning">Zapomenutý odchod</h5>
+          <p class="text-muted">
+            Blok ze dne <strong>{{ aktivni_session.zacatek|date:"j. n. Y" }}</strong>
+            od <strong>{{ aktivni_session.zacatek|time:"H:i" }}</strong> nemá zaznamenaný odchod.
+          </p>
+          {% if otevreny_pohyb %}
+            <p class="text-warning mb-2">
+              Nejprve doplňte návrat z pohybu <strong>{{ otevreny_pohyb.typ.nazev }}</strong>
+              (od {{ otevreny_pohyb.zacatek|time:"H:i" }}) — blok jde uzavřít až potom.
+            </p>
+            <a href="{% url 'timetracking:opravit_pohyb' otevreny_pohyb.pk %}" class="btn btn-warning btn-lg w-100">
+              <i class="bi bi-pencil"></i> Opravit pohyb
+            </a>
+          {% else %}
+            <a href="{% url 'timetracking:opravit_session' aktivni_session.pk %}" class="btn btn-warning btn-lg w-100">
+              <i class="bi bi-pencil"></i> Opravit záznam
+            </a>
+          {% endif %}
+        {% elif aktivni_session %}
           <div class="mb-3">
             <i class="bi bi-person-check-fill text-success" style="font-size:3rem"></i>
           </div>

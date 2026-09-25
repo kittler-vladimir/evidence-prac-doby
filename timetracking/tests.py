@@ -10,7 +10,8 @@ from django.utils import timezone
 
 from django_celery_beat.models import PeriodicTask
 
-from accounts.models import User, Employee, Sekce, Odbor, Oddeleni, TypUvazku, CasovyBlokUvazku
+from accounts.models import User, Employee, Funkce, Sekce, Odbor, Oddeleni, TypUvazku, CasovyBlokUvazku
+from timetracking.opravy import ZNACKA_POHYB, ZNACKA_SESSION, zaznamy_k_oprave
 from timetracking.bilance import format_minut, rozdel_na_tydny, secti
 from timetracking.forms import WorkSessionOpravitForm, PohybRucneForm
 from timetracking.models import WorkSession, WorkdaySummary, TypPohybu, Pohyb
@@ -1044,3 +1045,160 @@ class CloseOpenSessionsOznaceniTests(TestCase):
         utc = self.session.zacatek.astimezone(dt_timezone.utc).strftime("%d.%m.%Y %H:%M")
         self.assertIn(mistni, vystup)
         self.assertNotIn(utc, vystup)
+
+
+class OpravaZapomenutehoOdchoduTests(TestCase):
+    """Issue #57 — otevřené bloky/pohyby z předchozích dnů jsou vidět a opravitelné
+    z přehledu, výkazu a přehledu Odbor; opravovat smí vlastník, is_staff a vedoucí
+    v rozsahu spravovani_zamestnanci()."""
+
+    def setUp(self):
+        self.employee = vytvor_zamestnance()
+        oddeleni = self.employee.oddeleni
+        self.kolega = self._zamestnanec_v(oddeleni, "kolega@example.com", "0002")
+        self.vedouci = self._zamestnanec_v(oddeleni, "vedouci@example.com", "0003")
+        self.vedouci.funkce = Funkce.objects.get(kod=Funkce.VEDOUCI_ODDELENI)
+        self.vedouci.save()
+        self.cizi_vedouci = vytvor_zamestnance("cizi@example.com", "0004")
+        self.cizi_vedouci.funkce = Funkce.objects.get(kod=Funkce.VEDOUCI_ODDELENI)
+        self.cizi_vedouci.save()
+
+        self.vcera = timezone.localdate() - timedelta(days=1)
+        self.typ = TypPohybu.objects.create(nazev="Oběd", zkratka="OB")
+        self.stary = WorkSession.objects.create(
+            employee=self.employee, zacatek=self._cas(self.vcera, 10, 0),
+            poznamka=ZNACKA_SESSION + "moje poznámka",
+        )
+
+    def _zamestnanec_v(self, oddeleni, email, osobni_cislo):
+        user = User.objects.create_user(username=email, email=email, password="x",
+                                        first_name="T", last_name=osobni_cislo)
+        return Employee.objects.create(user=user, osobni_cislo=osobni_cislo, oddeleni=oddeleni,
+                                       typ_uvazku=self.employee.typ_uvazku,
+                                       datum_nastupu=timezone.localdate())
+
+    @staticmethod
+    def _cas(datum, hodina, minuta):
+        return timezone.make_aware(datetime.combine(datum, time(hodina, minuta)))
+
+    def _klient(self, employee):
+        c = Client()
+        c.force_login(employee.user)
+        return c
+
+    def _url_opravy(self):
+        return reverse("timetracking:opravit_session", args=[self.stary.pk])
+
+    # --- výběr záznamů ---
+
+    def test_k_oprave_jen_otevrene_z_predchozich_dnu(self):
+        WorkSession.objects.create(employee=self.kolega, zacatek=timezone.now() - timedelta(hours=1))
+        WorkSession.objects.create(
+            employee=self.kolega, zacatek=self._cas(self.vcera, 8, 0), konec=self._cas(self.vcera, 9, 0),
+        )
+        pohyb = Pohyb.objects.create(work_session=self.stary, typ=self.typ, zacatek=self._cas(self.vcera, 11, 0))
+        zaznamy = zaznamy_k_oprave([self.employee, self.kolega])
+        self.assertEqual([z["url"] for z in zaznamy], [
+            self._url_opravy(), reverse("timetracking:opravit_pohyb", args=[pohyb.pk]),
+        ])
+        self.assertTrue(zaznamy[0]["oznaceno"])
+
+    # --- přehled ---
+
+    def test_prehled_stary_blok_nabidne_opravu_a_skryje_odchod(self):
+        obsah = self._klient(self.employee).get(reverse("timetracking:dashboard")).content.decode()
+        self.assertIn("Zapomenutý odchod", obsah)
+        self.assertIn(self._url_opravy(), obsah)
+        self.assertIn(f"{self.vcera.day}. {self.vcera.month}. {self.vcera.year}", obsah)
+        self.assertNotIn(reverse("timetracking:clock_out"), obsah)
+        self.assertNotIn(reverse("timetracking:start_pohyb"), obsah)
+
+    def test_prehled_stary_blok_s_otevrenym_pohybem_odkaze_na_opravu_pohybu(self):
+        pohyb = Pohyb.objects.create(work_session=self.stary, typ=self.typ, zacatek=self._cas(self.vcera, 11, 0))
+        obsah = self._klient(self.employee).get(reverse("timetracking:dashboard")).content.decode()
+        self.assertIn(reverse("timetracking:opravit_pohyb", args=[pohyb.pk]), obsah)
+        self.assertNotIn(reverse("timetracking:return_pohyb"), obsah)
+
+    def test_prehled_dnesni_blok_beze_zmeny(self):
+        WorkSession.objects.create(employee=self.kolega, zacatek=timezone.now() - timedelta(minutes=30))
+        obsah = self._klient(self.kolega).get(reverse("timetracking:dashboard")).content.decode()
+        self.assertIn(reverse("timetracking:clock_out"), obsah)
+        self.assertNotIn("Zapomenutý odchod", obsah)
+
+    # --- výkaz a Odbor ---
+
+    def test_vykaz_zobrazi_sekci_jen_kdyz_je_co_opravit(self):
+        obsah = self._klient(self.employee).get(reverse("timetracking:prehled_mesice")).content.decode()
+        self.assertIn("Záznamy k opravě", obsah)
+        self.assertIn(self._url_opravy(), obsah)
+        obsah_kolegy = self._klient(self.kolega).get(reverse("timetracking:prehled_mesice")).content.decode()
+        self.assertNotIn("Záznamy k opravě", obsah_kolegy)
+
+    def test_odbor_ukaze_zaznamy_jen_v_rozsahu_spravy(self):
+        url = reverse("reports:prehled_tymu")
+        self.assertIn(self._url_opravy(), self._klient(self.vedouci).get(url).content.decode())
+        self.assertNotIn(self._url_opravy(), self._klient(self.cizi_vedouci).get(url).content.decode())
+        self.assertNotIn("Záznamy k opravě v týmu", self._klient(self.kolega).get(url).content.decode())
+
+    # --- oprávnění ---
+
+    def test_opravneni_k_oprave_bloku(self):
+        self.assertEqual(self._klient(self.employee).get(self._url_opravy()).status_code, 200)
+        self.assertEqual(self._klient(self.vedouci).get(self._url_opravy()).status_code, 200)
+        self.assertEqual(self._klient(self.kolega).get(self._url_opravy()).status_code, 403)
+        self.assertEqual(self._klient(self.cizi_vedouci).get(self._url_opravy()).status_code, 403)
+
+    def test_opravneni_k_oprave_pohybu(self):
+        pohyb = Pohyb.objects.create(work_session=self.stary, typ=self.typ, zacatek=self._cas(self.vcera, 11, 0))
+        url = reverse("timetracking:opravit_pohyb", args=[pohyb.pk])
+        self.assertEqual(self._klient(self.vedouci).get(url).status_code, 200)
+        self.assertEqual(self._klient(self.kolega).get(url).status_code, 403)
+        self.assertEqual(self._klient(self.cizi_vedouci).get(url).status_code, 403)
+
+    # --- uložení opravy ---
+
+    def _data_bloku(self, konec, next_url):
+        return {
+            "zacatek": f"{self.vcera:%Y-%m-%d}T10:00",
+            "konec": f"{self.vcera:%Y-%m-%d}T{konec}",
+            "poznamka": self.stary.poznamka,
+            "next": next_url,
+        }
+
+    def test_vedouci_ulozi_opravu_a_vrati_se_na_next(self):
+        odpoved = self._klient(self.vedouci).post(
+            self._url_opravy(), self._data_bloku("15:45", reverse("reports:prehled_tymu")),
+        )
+        self.assertRedirects(odpoved, reverse("reports:prehled_tymu"), fetch_redirect_response=False)
+        self.stary.refresh_from_db()
+        self.assertEqual(self.stary.konec, self._cas(self.vcera, 15, 45))
+        self.assertTrue(self.stary.opraveno)
+        self.assertEqual(self.stary.poznamka, "moje poznámka")
+
+    def test_next_mimo_web_se_ignoruje(self):
+        odpoved = self._klient(self.employee).post(
+            self._url_opravy(), self._data_bloku("15:45", "https://evil.example/"),
+        )
+        self.assertRedirects(odpoved, reverse("timetracking:dashboard"), fetch_redirect_response=False)
+
+    def test_nejdriv_pohyb_pak_blok(self):
+        pohyb = Pohyb.objects.create(
+            work_session=self.stary, typ=self.typ, zacatek=self._cas(self.vcera, 11, 0),
+            poznamka=ZNACKA_POHYB,
+        )
+        klient = self._klient(self.employee)
+        klient.post(self._url_opravy(), self._data_bloku("15:45", ""))
+        self.stary.refresh_from_db()
+        self.assertIsNone(self.stary.konec)  # blok s otevřeným pohybem uzavřít nejde
+
+        klient.post(reverse("timetracking:opravit_pohyb", args=[pohyb.pk]), {
+            "zacatek": f"{self.vcera:%Y-%m-%d}T11:00", "konec": f"{self.vcera:%Y-%m-%d}T12:00",
+            "poznamka": pohyb.poznamka,
+        })
+        pohyb.refresh_from_db()
+        self.assertEqual(pohyb.konec, self._cas(self.vcera, 12, 0))
+        self.assertEqual(pohyb.poznamka, "")
+
+        klient.post(self._url_opravy(), self._data_bloku("15:45", ""))
+        self.stary.refresh_from_db()
+        self.assertEqual(self.stary.konec, self._cas(self.vcera, 15, 45))

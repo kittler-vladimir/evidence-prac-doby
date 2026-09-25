@@ -1,12 +1,18 @@
 {% extends "base.html" %}
 {% load crispy_forms_tags %}
-{% block title %}Opravit záznam{% endblock %}
+{% block title %}Opravit pohyb{% endblock %}
 
 {% block content %}
 <div class="row justify-content-center">
   <div class="col-md-6">
     <div class="card shadow-sm">
-      <div class="card-header"><strong>Opravit záznam – {{ session.employee.jmeno }}</strong></div>
+      <div class="card-header">
+        <strong>Opravit pohyb – {{ pohyb.work_session.employee.jmeno }}</strong>
+        <div class="small text-muted">
+          {{ pohyb.typ.nazev }} v pracovním bloku ze dne {{ pohyb.work_session.zacatek|date:"j. n. Y" }}
+          od {{ pohyb.work_session.zacatek|time:"H:i" }}
+        </div>
+      </div>
       <div class="card-body">
         <form method="post">
           {% csrf_token %}

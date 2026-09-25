@@ -31,6 +31,8 @@
   {% endif %}
 </div>
 
+{% include "timetracking/_zaznamy_k_oprave.html" with zaznamy=zaznamy_k_oprave nadpis="Záznamy k opravě v týmu" s_jmenem=True %}
+
 {% if not skupiny %}
 <p class="text-center text-muted py-3">Žádní podřízení zaměstnanci.</p>
 {% else %}

@@ -12,9 +12,7 @@ from datetime import timedelta
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 from timetracking.models import WorkSession, Pohyb
-
-POZNAMKA_SESSION = "[AUTOMATICKY] Odchod nebyl zaznamenán. Prosím doplňte čas odchodu.\n"
-POZNAMKA_POHYB = "[AUTOMATICKY] Návrat z pohybu nebyl zaznamenán. Prosím doplňte čas návratu.\n"
+from timetracking.opravy import ZNACKA_POHYB as POZNAMKA_POHYB, ZNACKA_SESSION as POZNAMKA_SESSION
 
 
 def _cas(dt):
