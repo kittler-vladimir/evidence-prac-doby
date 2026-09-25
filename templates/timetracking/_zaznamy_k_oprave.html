@@ -1,0 +1,27 @@
+{% comment %}
+Seznam otevřených bloků/pohybů z předchozích dnů (timetracking.opravy.zaznamy_k_oprave).
+Parametry: zaznamy, nadpis, s_jmenem (zobrazit sloupec se zaměstnancem).
+Po uložení opravy se formulář vrátí na aktuální stránku (next).
+{% endcomment %}
+{% if zaznamy %}
+<div class="card border-warning shadow-sm mb-3">
+  <div class="card-header bg-warning-subtle">
+    <i class="bi bi-exclamation-triangle"></i> <strong>{{ nadpis }}</strong>
+    <small class="text-muted">— otevřené z předchozích dnů, chybí odchod nebo návrat</small>
+  </div>
+  <ul class="list-group list-group-flush">
+    {% for z in zaznamy %}
+    <li class="list-group-item d-flex justify-content-between align-items-center flex-wrap gap-2">
+      <span>
+        {% if s_jmenem %}<strong>{{ z.employee.jmeno }}</strong> – {% endif %}
+        {{ z.druh }} ze dne {{ z.zacatek|date:"j. n. Y" }} od {{ z.zacatek|time:"H:i" }}
+        {% if z.oznaceno %}<span class="badge bg-secondary">AUTOMATICKY</span>{% endif %}
+      </span>
+      <a href="{{ z.url }}?next={{ request.get_full_path|urlencode }}" class="btn btn-sm btn-warning">
+        <i class="bi bi-pencil"></i> Opravit
+      </a>
+    </li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}

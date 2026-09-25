@@ -11,6 +11,7 @@ from django.http import HttpResponse
 from accounts.models import Employee, Odbor, Oddeleni, Sekce, viditelni_zamestnanci
 from timetracking.bilance import format_minut, rozdel_na_tydny, secti
 from timetracking.models import WorkdaySummary
+from timetracking.opravy import zaznamy_k_oprave
 from .services import NEPRITOMEN, PRITOMEN, stavy_zamestnancu
 
 DELKA_VYHLEDAVACIHO_DOTAZU = 2
@@ -152,8 +153,18 @@ def prehled_tymu(request):
 
     skupiny = _seskup_hierarchicky(data) if request.user.is_staff else _seskup_podle_oddeleni(data)
 
+    # Záznamy k opravě jen v rozsahu, který smí uživatel spravovat (spravovani_zamestnanci),
+    # ne v celém viditelném okruhu — viditelni_zamestnanci je jen pro čtení.
+    if request.user.is_staff:
+        spravovani = Employee.objects.all()
+    elif hasattr(request.user, "employee"):
+        spravovani = request.user.employee.spravovani_zamestnanci()
+    else:
+        spravovani = Employee.objects.none()
+
     return render(request, "reports/prehled_tymu.html", {
         "skupiny": skupiny, "filtr": filtr, "rok": rok, "mesic": mesic,
+        "zaznamy_k_oprave": zaznamy_k_oprave(spravovani),
     })
 
 

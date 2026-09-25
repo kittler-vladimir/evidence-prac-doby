@@ -29,6 +29,31 @@ class WorkSessionOpravitForm(forms.ModelForm):
             self.initial["konec"] = timezone.localtime(self.instance.konec).strftime("%Y-%m-%dT%H:%M")
 
 
+class PohybOpravitForm(forms.ModelForm):
+    """Oprava existujícího pohybu (typicky doplnění zapomenutého návratu).
+    Pracovní blok zůstává stejný — kontrolu, že pohyb leží uvnitř bloku a
+    nepřekrývá jiný, dělá Pohyb.clean()."""
+
+    class Meta:
+        model = Pohyb
+        fields = ["zacatek", "konec", "poznamka"]
+        widgets = {
+            "zacatek": forms.DateTimeInput(
+                attrs={"type": "datetime-local"}, format="%Y-%m-%dT%H:%M"
+            ),
+            "konec": forms.DateTimeInput(
+                attrs={"type": "datetime-local"}, format="%Y-%m-%dT%H:%M"
+            ),
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if self.instance.zacatek:
+            self.initial["zacatek"] = timezone.localtime(self.instance.zacatek).strftime("%Y-%m-%dT%H:%M")
+        if self.instance.konec:
+            self.initial["konec"] = timezone.localtime(self.instance.konec).strftime("%Y-%m-%dT%H:%M")
+
+
 class WorkSessionRucneForm(forms.ModelForm):
     """Formulář pro ruční přidání pracovního bloku."""
 
