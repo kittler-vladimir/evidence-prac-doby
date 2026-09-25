@@ -1,19 +1,22 @@
 ## Description
-Two bugs in `close_open_sessions`, found while reviewing the 2026-09-25 nightly run:
-
-1. **Output showed UTC instead of local time.** `{session.zacatek:%d.%m.%Y %H:%M}` formatted the stored (UTC-aware) datetime directly, so the log reported "session od 24.09.2026 08:00" for a clock-in entered at 10:00 local — same bug class as #41. Data was never affected, only the printed time.
-2. **Not idempotent.** Every run prepended another `[AUTOMATICKY]` note to each still-open row past the threshold, so an uncorrected record gained a new copy every night (and two per night if Celery Beat and the Windows Task Scheduler job both ran).
+A `WorkSession` or `Pohyb` left open from a previous day (forgotten clock-out / return) could only be fixed in Django admin: nothing linked to `opravit_session`, there was no view to edit an existing `Pohyb` (and `WorkSession.clean()` refuses to close a block with an open movement), and the dashboard's one-click Odchod closed such a block with *today's* time. This makes these records visible and fixable where people work.
 
 ## Changes
-- `timetracking/management/commands/close_open_sessions.py`: times formatted via `timezone.localtime()`; rows whose `poznamka` already starts with the command's marker are skipped and only listed as "stále čeká na opravu (označena dříve)", so the log keeps reminding about them without stacking notes. Marker texts pulled into module constants.
-- `timetracking/tests.py`: new `CloseOpenSessionsOznaceniTests` — second run doesn't re-flag a session or a pohyb, keeps the user's own note, lists the earlier-flagged row as still waiting, and prints local rather than UTC time.
-- `CLAUDE.md`: Scheduled maintenance section updated (idempotency, local time; running both schedulers no longer double-flags).
+- `timetracking/opravy.py` (new): single source for the `[AUTOMATICKY]` marker texts (now also imported by `close_open_sessions`), `zaznamy_k_oprave()` (open blocks/movements started before today's local midnight), `muze_opravovat()` (owner, `is_staff`, or a manager whose `spravovani_zamestnanci()` contains the employee — CRUD scope, never the read-only `viditelni_zamestnanci()`), `bezpecny_next()` (same-host redirect only).
+- Dashboard: a block started before today shows a dated "Zapomenutý odchod" warning with "Opravit záznam" (or "Opravit pohyb" first if a movement is still open); Odchod and pohyb controls aren't rendered for it.
+- Výkaz: "Záznamy k opravě" section (own records). Odbor report: "Záznamy k opravě v týmu" (managed scope; everyone for `is_staff`). Shared partial `_zaznamy_k_oprave.html`.
+- `opravit_session`: widened permission (managers in scope), strips the marker when `konec` is saved, honours `next`. New `opravit_pohyb` view + `PohybOpravitForm` + template, same rules.
+- `CLAUDE.md`: new "Forgotten clock-outs" section; quick-actions note updated.
+- Tests: `OpravaZapomenutehoOdchoduTests` (11) — selection, dashboard (stale vs. today's block, open pohyb), Výkaz/Odbor sections and scope, 200/403 permissions for owner/manager/colleague/other manager, marker stripping, `next` redirect incl. rejected off-site URL, pohyb-then-block correction.
+
+## Known limitation (not changed here)
+`clock_out`'s default "now" path still accepts closing a previous-day block on a direct POST or from a dashboard tab left open across midnight — the restriction is UI-level. Blocking it server-side would reverse an earlier deliberate, tested decision; left for a separate decision.
 
 ## How to test
-1. `venv/Scripts/python.exe manage.py test` — 127/127 pass (was 123; +4 new)
-2. Run `close_open_sessions` twice against a DB with an open session older than 14h — the note appears once, the second run lists it as still awaiting correction.
+1. `venv/Scripts/python.exe manage.py test` — 138/138 pass
+2. Create an open block for yesterday; dashboard shows the dated warning without Odchod, Výkaz and Odbor list it; fix it from Odbor → returns to Odbor, block closed, `[AUTOMATICKY]` note gone. (Verified in the browser on the test account; temporary data removed.)
 
 ## Issue
-Closes #55
+Closes #57
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
