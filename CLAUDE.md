@@ -12,6 +12,7 @@ The project is runnable locally:
 - All templates referenced by views exist under `templates/`.
 - **Is a git repository**, hosted on GitHub (`origin` remote) — work happens on feature branches with PRs (`issue-N-*` branch naming), issues tracked via `gh issue`.
 - **Automated tests exist** — run with `venv/Scripts/python.exe manage.py test`, covering `accounts`, `reports`, `leaves`, `timetracking`. A GitHub Actions workflow (`.github/workflows/tests.yml`) runs the same suite (sqlite, dummy env vars — no secrets needed) on every push to `main` and every PR.
+- **`CHANGELOG.md`** is the user-facing change log: Czech, newest first, grouped under a `## D. M. RRRR` date heading, one line per user-visible change written for users (no technical terms) and ending with its issue number `(#N)`. Whenever a PR with a user-visible change is merged, add the release-log line the user picked under that day's date (a follow-up commit if the line was only chosen after the merge). Internal-only changes (refactors, tests, tooling, docs) don't go in.
 
 ## Local dev database (SQLite vs PostgreSQL)
 
