@@ -594,6 +594,28 @@ class PrehledMesiceViewTests(TestCase):
         self.assertFalse(rozpracovany.je_zapocitan)
         self.assertEqual((rozpracovany.denni_prescas_minuty, rozpracovany.denni_nedostatek_minuty), (0, 0))
 
+    def test_mesic_celkem_radek_na_konci_tabulky(self):
+        # Issue #63 — tabulka končí souhrnným řádkem za celý měsíc, ne jen
+        # kartami nahoře. Bilance celkem = 45 - 120 = -75 min = "−1h 15min".
+        response = self.client.get(reverse("timetracking:prehled_mesice"), {"rok": 2026, "mesic": 9})
+        obsah = response.content.decode("utf-8")
+        # Stejná čísla jsou i v kartách nahoře — kontroluje se proto obsah řádku samotného.
+        radek = re.search(r"<tr[^>]*>\s*<td>Měsíc celkem</td>(.*?)</tr>", obsah, re.S)
+        self.assertIsNotNone(radek)
+        bunky = re.findall(r"<td>(.*?)</td>", radek.group(1), re.S)
+        self.assertEqual(
+            [b.strip() for b in bunky],
+            ["22h 45min", "0h 45min", "2h 0min", "Bilance: −1h 15min"],  # 525+390+0+450 min odpracováno
+        )
+        self.assertNotIn("-1h 15min", obsah)  # skutečné znaménko "−", ne pomlčka
+
+    def test_prazdny_mesic_nezobrazuje_radek_mesic_celkem(self):
+        response = self.client.get(reverse("timetracking:prehled_mesice"), {"rok": 2026, "mesic": 10})
+        self.assertEqual(response.context["tydny"], [])
+        obsah = response.content.decode("utf-8")
+        self.assertNotIn("Měsíc celkem", obsah)
+        self.assertIn("Žádné záznamy.", obsah)
+
 
 class DashboardOtevrenyBlokTests(TestCase):
     """Issue #34 — den jen s otevřeným blokem se na dashboardu neukazuje jako nedostatek."""

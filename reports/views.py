@@ -149,6 +149,7 @@ def prehled_tymu(request):
             "odpracovano_m": celkem % 60,
             "prescas_minuty": bilance.prescas,
             "nedostatek_minuty": bilance.nedostatek,
+            "bilance_minuty": bilance.bilance,
         })
 
     skupiny = _seskup_hierarchicky(data) if request.user.is_staff else _seskup_podle_oddeleni(data)
