@@ -1429,6 +1429,31 @@ class UkonceniPohybuNaKonciBlokuTests(TestCase):
         self.assertEqual(pohyb.konec, self._cas(self.patek, 15, 0))
         self.assertEqual(session.konec, self._cas(self.patek, 15, 0))
 
+    def test_jiny_typ_pevne_doby_se_ridi_svymi_bloky(self):
+        jiny_typ = TypUvazku.objects.create(
+            nazev="Pevná ranní", hodiny_denne=8, hodiny_tyydne=40,
+            druh_pracovni_doby=TypUvazku.DruhPracovniDoby.PEVNA,
+        )
+        CasovyBlokUvazku.objects.create(
+            typ_uvazku=jiny_typ, blok_od="06:00", blok_do="14:30", ctvrtek=True,
+        )
+        self.employee.typ_uvazku = jiny_typ
+        self.employee.save()
+        session, pohyb = self._otevreny(self.ctvrtek)
+        self._spust()
+        self._obnov(session, pohyb)
+        self.assertEqual(pohyb.konec, self._cas(self.ctvrtek, 14, 30))
+        self.assertEqual(session.konec, self._cas(self.ctvrtek, 14, 30))
+
+    def test_otevreny_blok_bez_pohybu_jen_oznaci(self):
+        session = WorkSession.objects.create(
+            employee=self.employee, zacatek=self._cas(self.ctvrtek, 7, 45),
+        )
+        self._spust()
+        session.refresh_from_db()
+        self.assertIsNone(session.konec)
+        self.assertTrue(session.poznamka.startswith(ZNACKA_SESSION.rstrip("\n")))
+
     def test_prepocita_denni_souhrn(self):
         self._otevreny(self.ctvrtek)
         self._spust()

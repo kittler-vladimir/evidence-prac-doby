@@ -58,7 +58,7 @@ celery -A config beat -l info
 ```
 
 Celery Beat spouští pravidelně tyto příkazy:
-- `close_open_sessions` — každou noc ve **2:00 (Europe/Prague)** označí zapomenuté otevřené záznamy (`[AUTOMATICKY]`) k ruční opravě. Jedinou výjimkou je pevná pracovní doba: zapomenutý pohyb typu se zaškrtnutým „Ukončit na konci pracovního bloku“ (výchozí služební cesta a lékař) ukončí i s pracovním blokem na konci bloku daného dne (např. 16:15 po–čt, 15:00 pá). Naplánováno jako `PeriodicTask` (`timetracking.tasks.close_open_sessions`), zaregistrováno migrací `timetracking/migrations/0006_schedule_close_open_sessions.py` — funguje automaticky, jakmile běží worker i beat, není potřeba nic nastavovat ručně v adminu.
+- `close_open_sessions` — každou noc ve **2:00 (Europe/Prague)** označí zapomenuté otevřené záznamy (`[AUTOMATICKY]`) k ruční opravě. Jedinou výjimkou je pevná pracovní doba: zapomenutý pohyb typu se zaškrtnutým „Ukončit na konci pracovního bloku“ (výchozí služební cesta a lékař) ukončí na konci časového bloku, který má typ úvazku daného zaměstnance zaškrtnutý pro ten den v týdnu (u dnešní pevné doby 16:15 po–čt, 15:00 pá) — a teprve spolu s tímto pohybem ukončí i pracovní blok. Zapomenutý odchod bez takového pohybu se dál jen označí. Naplánováno jako `PeriodicTask` (`timetracking.tasks.close_open_sessions`), zaregistrováno migrací `timetracking/migrations/0006_schedule_close_open_sessions.py` — funguje automaticky, jakmile běží worker i beat, není potřeba nic nastavovat ručně v adminu.
 - `obnov_rocni_naroky` — každý 1. leden převede zůstatky dovolené/indispozičního volna do nového roku.
 
 ### Ruční spuštění `close_open_sessions`
