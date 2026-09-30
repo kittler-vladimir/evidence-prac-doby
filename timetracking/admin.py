@@ -19,6 +19,7 @@ class TypPohybuAdmin(admin.ModelAdmin):
         "zapocitava_se_do_pracovni_doby",
         "zobrazuje_se_na_pracovisti",
         "zapocitava_se_u_pruzne_pracovni_doby",
+        "ukoncit_na_konec_bloku",
         "aktivni",
     ]
     list_editable = ["aktivni"]

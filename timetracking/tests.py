@@ -1357,3 +1357,136 @@ class OpravaZapomenutehoOdchoduTests(TestCase):
         klient.post(self._url_opravy(), self._data_bloku("15:45", ""))
         self.stary.refresh_from_db()
         self.assertEqual(self.stary.konec, self._cas(self.vcera, 15, 45))
+
+
+class UkonceniPohybuNaKonciBlokuTests(TestCase):
+    """Issue #68 — u pevné pracovní doby noční close_open_sessions sám ukončí
+    zapomenutý pohyb typu s ukoncit_na_konec_bloku (i s jeho pracovním blokem)
+    na konci bloku dne, kdy pohyb začal; jinak záznam jen označí jako dosud."""
+
+    def setUp(self):
+        self.employee = vytvor_zamestnance()
+        self.employee.typ_uvazku.druh_pracovni_doby = TypUvazku.DruhPracovniDoby.PEVNA
+        self.employee.typ_uvazku.save()
+        CasovyBlokUvazku.objects.create(
+            typ_uvazku=self.employee.typ_uvazku, blok_od="07:30", blok_do="16:15",
+            pondeli=True, utery=True, streda=True, ctvrtek=True,
+        )
+        CasovyBlokUvazku.objects.create(
+            typ_uvazku=self.employee.typ_uvazku, blok_od="07:30", blok_do="15:00", patek=True,
+        )
+        self.lekar = TypPohybu.objects.create(
+            nazev="Lékař", zkratka="Lekar",
+            zapocitava_se_do_pracovni_doby=True, ukoncit_na_konec_bloku=True,
+        )
+        self.obed = TypPohybu.objects.create(nazev="Oběd", zkratka="Obed")
+        dnes = timezone.localdate()
+        pondeli = dnes - timedelta(days=dnes.weekday() + 7)  # minulý týden
+        self.streda = pondeli + timedelta(days=2)
+        self.ctvrtek = pondeli + timedelta(days=3)
+        self.patek = pondeli + timedelta(days=4)
+        self.sobota = pondeli + timedelta(days=5)
+
+    @staticmethod
+    def _cas(datum, hodina, minuta=0):
+        return timezone.make_aware(datetime.combine(datum, time(hodina, minuta)))
+
+    def _otevreny(self, datum_bloku, datum_pohybu=None, hodina_pohybu=9, typ=None):
+        session = WorkSession.objects.create(
+            employee=self.employee, zacatek=self._cas(datum_bloku, 7, 45),
+        )
+        pohyb = Pohyb.objects.create(
+            work_session=session, typ=typ or self.lekar,
+            zacatek=self._cas(datum_pohybu or datum_bloku, hodina_pohybu, 10),
+        )
+        return session, pohyb
+
+    @staticmethod
+    def _spust():
+        out = StringIO()
+        call_command("close_open_sessions", stdout=out)
+        return out.getvalue()
+
+    def _obnov(self, *zaznamy):
+        for z in zaznamy:
+            z.refresh_from_db()
+
+    def test_ctvrtek_ukonci_pohyb_i_blok_v_16_15(self):
+        session, pohyb = self._otevreny(self.ctvrtek)
+        vystup = self._spust()
+        self._obnov(session, pohyb)
+        self.assertEqual(pohyb.konec, self._cas(self.ctvrtek, 16, 15))
+        self.assertEqual(session.konec, self._cas(self.ctvrtek, 16, 15))
+        self.assertTrue(pohyb.poznamka.startswith("[AUTOMATICKY] Ukončeno automaticky"))
+        self.assertIn("(16:15)", session.poznamka)
+        self.assertFalse(session.opraveno)
+        self.assertIn("ukončeny automaticky v 16:15", vystup)
+
+    def test_patek_ukonci_v_15_00(self):
+        session, pohyb = self._otevreny(self.patek)
+        self._spust()
+        self._obnov(session, pohyb)
+        self.assertEqual(pohyb.konec, self._cas(self.patek, 15, 0))
+        self.assertEqual(session.konec, self._cas(self.patek, 15, 0))
+
+    def test_prepocita_denni_souhrn(self):
+        self._otevreny(self.ctvrtek)
+        self._spust()
+        souhrn = WorkdaySummary.objects.get(employee=self.employee, datum=self.ctvrtek)
+        self.assertEqual(souhrn.hrube_minuty, 510)  # 07:45–16:15, pohyb se u PEVNA neodečítá
+
+    def test_druhy_beh_nic_nezmeni(self):
+        session, pohyb = self._otevreny(self.ctvrtek)
+        self._spust()
+        self._obnov(session, pohyb)
+        poznamka = session.poznamka
+        vystup = self._spust()
+        session.refresh_from_db()
+        self.assertEqual(session.poznamka, poznamka)
+        self.assertNotIn("ukončeny automaticky", vystup)
+
+    def test_drive_oznaceny_zaznam_ukonci_a_odstrani_starou_znacku(self):
+        session, pohyb = self._otevreny(self.ctvrtek)
+        session.poznamka = ZNACKA_SESSION + "vlastní poznámka"
+        session.save()
+        pohyb.poznamka = ZNACKA_POHYB
+        pohyb.save()
+        self._spust()
+        self._obnov(session, pohyb)
+        self.assertIsNotNone(session.konec)
+        self.assertNotIn("Odchod nebyl zaznamenán", session.poznamka)
+        self.assertNotIn("Návrat z pohybu nebyl zaznamenán", pohyb.poznamka)
+        self.assertTrue(session.poznamka.endswith("vlastní poznámka"))
+
+    def _over_jen_oznaceno(self, session, pohyb):
+        self._spust()
+        self._obnov(session, pohyb)
+        self.assertIsNone(pohyb.konec)
+        self.assertIsNone(session.konec)
+        self.assertTrue(pohyb.poznamka.startswith(ZNACKA_POHYB.rstrip("\n")))
+
+    def test_typ_bez_priznaku_jen_oznaci(self):
+        self._over_jen_oznaceno(*self._otevreny(self.ctvrtek, typ=self.obed))
+
+    def test_pruzna_doba_jen_oznaci(self):
+        self.employee.typ_uvazku.druh_pracovni_doby = TypUvazku.DruhPracovniDoby.PRUZNA
+        self.employee.typ_uvazku.save()
+        self._over_jen_oznaceno(*self._otevreny(self.ctvrtek))
+
+    def test_den_bez_bloku_jen_oznaci(self):
+        self._over_jen_oznaceno(*self._otevreny(self.sobota))
+
+    def test_pohyb_po_konci_bloku_jen_oznaci(self):
+        self._over_jen_oznaceno(*self._otevreny(self.ctvrtek, hodina_pohybu=17))
+
+    def test_blok_z_jineho_dne_jen_oznaci(self):
+        self._over_jen_oznaceno(*self._otevreny(self.streda, datum_pohybu=self.ctvrtek))
+
+    def test_dnesni_pohyb_neukonci(self):
+        ted = timezone.now()
+        session = WorkSession.objects.create(employee=self.employee, zacatek=ted - timedelta(minutes=2))
+        pohyb = Pohyb.objects.create(work_session=session, typ=self.lekar, zacatek=ted - timedelta(minutes=1))
+        self._spust()
+        self._obnov(session, pohyb)
+        self.assertIsNone(pohyb.konec)
+        self.assertIsNone(session.konec)

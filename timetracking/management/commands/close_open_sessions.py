@@ -4,6 +4,11 @@ Označí zapomenuté otevřené sessions (starší než X hodin) jako vyžadují
 Spouští se přes timetracking.tasks.close_open_sessions jako nightly Celery Beat úloha
 (2:00 Europe/Prague, zaregistrováno migrací 0006_schedule_close_open_sessions).
 
+Nejdřív (#68) ukončí zapomenuté pohyby typů s `ukoncit_na_konec_bloku` u zaměstnanců
+s pevnou pracovní dobou — i s jejich pracovním blokem — na konci bloku dne, kdy pohyb
+začal (timetracking.opravy.ukonci_na_konec_bloku). Rozhoduje začátek před dnešní místní
+půlnocí, ne práh --hodiny. Co takto ukončit nejde, jen se označí jako dosud.
+
 Idempotentní: záznam, který už nese poznámku [AUTOMATICKY] z dřívějšího běhu, se
 znovu neoznačuje (jen se vypíše jako stále čekající na opravu) — jinak by neopravený
 záznam dostával další kopii poznámky každou noc.
@@ -12,7 +17,12 @@ from datetime import timedelta
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 from timetracking.models import WorkSession, Pohyb
-from timetracking.opravy import ZNACKA_POHYB as POZNAMKA_POHYB, ZNACKA_SESSION as POZNAMKA_SESSION
+from timetracking.opravy import (
+    ZNACKA_POHYB as POZNAMKA_POHYB,
+    ZNACKA_SESSION as POZNAMKA_SESSION,
+    ukonci_na_konec_bloku,
+    zacatek_dneska,
+)
 
 
 def _cas(dt):
@@ -31,6 +41,7 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
+        self._ukonci_na_konec_bloku()
         threshold = timezone.now() - timedelta(hours=options["hodiny"])
 
         stare_sessions = WorkSession.objects.filter(konec__isnull=True, zacatek__lt=threshold)
@@ -80,3 +91,22 @@ class Command(BaseCommand):
                 f"  … {pohyb.employee} – pohyb ({pohyb.typ.zkratka}) od {_cas(pohyb.zacatek)} "
                 f"stále čeká na opravu (označen dříve)."
             )
+
+    def _ukonci_na_konec_bloku(self):
+        kandidati = Pohyb.objects.filter(
+            konec__isnull=True,
+            zacatek__lt=zacatek_dneska(),
+            typ__ukoncit_na_konec_bloku=True,
+        ).select_related("typ", "work_session__employee__user", "work_session__employee__typ_uvazku")
+        ukonceno = 0
+        for pohyb in kandidati:
+            konec = ukonci_na_konec_bloku(pohyb)
+            if konec is None:
+                continue
+            ukonceno += 1
+            self.stdout.write(
+                f"  + {pohyb.employee} – pohyb ({pohyb.typ.zkratka}) od {_cas(pohyb.zacatek)} "
+                f"i pracovní blok ukončeny automaticky v {timezone.localtime(konec):%H:%M}."
+            )
+        if ukonceno:
+            self.stdout.write(f"Celkem ukončeno {ukonceno} pohybů na konci pracovního bloku.")
