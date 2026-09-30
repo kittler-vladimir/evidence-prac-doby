@@ -159,6 +159,17 @@ class TypPohybu(models.Model):
             "„započítává se do pracovní doby“."
         ),
     )
+    ukoncit_na_konec_bloku = models.BooleanField(
+        _("ukončit na konci pracovního bloku"),
+        default=False,
+        help_text=_(
+            "Jen pro pevnou pracovní dobu: pohyb, který zaměstnanec neukončí "
+            "týž den (např. služební cesta, lékař), noční údržba sama ukončí "
+            "na konci pracovního bloku daného dne — spolu s pracovním blokem, "
+            "ve kterém běží. Vypnuto (výchozí): zapomenutý pohyb se jen "
+            "označí k ruční opravě."
+        ),
+    )
     aktivni = models.BooleanField(_("aktivní"), default=True)
 
     class Meta:

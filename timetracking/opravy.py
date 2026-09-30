@@ -6,6 +6,8 @@ odstraňuje a příkaz podle něj pozná už označený záznam.
 """
 from datetime import datetime, time
 
+from django.core.exceptions import ValidationError
+from django.db import transaction
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.http import url_has_allowed_host_and_scheme
@@ -14,6 +16,8 @@ from .models import Pohyb, WorkSession
 
 ZNACKA_SESSION = "[AUTOMATICKY] Odchod nebyl zaznamenán. Prosím doplňte čas odchodu.\n"
 ZNACKA_POHYB = "[AUTOMATICKY] Návrat z pohybu nebyl zaznamenán. Prosím doplňte čas návratu.\n"
+# Auditní poznámka k pohybu i bloku, které noční údržba sama ukončila (#68); {cas} = HH:MM.
+ZNACKA_AUTO_UKONCENI = "[AUTOMATICKY] Ukončeno automaticky na konci pracovního bloku ({cas}).\n"
 
 
 def odstran_znacku(poznamka, znacka):
@@ -84,3 +88,57 @@ def bezpecny_next(request, vychozi="timetracking:dashboard"):
     ):
         return kam
     return reverse(vychozi)
+
+
+def konec_bloku_pevne_doby(employee, datum):
+    """Konec posledního časového bloku pevné pracovní doby zaškrtnutého pro den
+    v týdnu `datum` (aware datetime), nebo None — zaměstnanec nemá pevnou
+    pracovní dobu, nebo pro ten den žádný blok neplatí (víkend...)."""
+    from accounts.models import CasovyBlokUvazku, TypUvazku
+
+    typ = employee.typ_uvazku
+    if typ is None or typ.druh_pracovni_doby != TypUvazku.DruhPracovniDoby.PEVNA:
+        return None
+    den_pole = CasovyBlokUvazku.DNY_V_TYDNU[datum.weekday()]
+    blok = (
+        CasovyBlokUvazku.objects.filter(typ_uvazku=typ, **{den_pole: True})
+        .order_by("-blok_do").first()
+    )
+    if blok is None:
+        return None
+    return timezone.make_aware(datetime.combine(datum, blok.blok_do))
+
+
+def ukonci_na_konec_bloku(pohyb):
+    """Zapomenutý pohyb typu s `ukoncit_na_konec_bloku` u zaměstnance s pevnou
+    pracovní dobou ukončí — spolu s jeho pracovním blokem — na konci bloku dne,
+    kdy pohyb začal (#68). Vrátí použitý konec, nebo None, když pravidlo nejde
+    použít (pak zůstává jen označení k ruční opravě): jiný typ/úvazek, den bez
+    bloku, pohyb začal až po konci bloku, blok začal jiný den, nebo by uložení
+    neprošlo validací modelu (vše se pak vrátí zpět)."""
+    session = pohyb.work_session
+    if not pohyb.typ.ukoncit_na_konec_bloku or pohyb.konec is not None or session.konec is not None:
+        return None
+    datum = timezone.localdate(pohyb.zacatek)
+    if timezone.localdate(session.zacatek) != datum:
+        return None
+    konec = konec_bloku_pevne_doby(session.employee, datum)
+    if konec is None or pohyb.zacatek >= konec:
+        return None
+
+    poznamka = ZNACKA_AUTO_UKONCENI.format(cas=f"{timezone.localtime(konec):%H:%M}")
+    try:
+        with transaction.atomic():
+            pohyb.konec = konec
+            pohyb.poznamka = poznamka + odstran_znacku(pohyb.poznamka, ZNACKA_POHYB)
+            pohyb.full_clean()
+            pohyb.save()
+            session.konec = konec
+            session.poznamka = poznamka + odstran_znacku(session.poznamka, ZNACKA_SESSION)
+            session.full_clean()
+            session.save()
+    except ValidationError:
+        pohyb.refresh_from_db()
+        session.refresh_from_db()
+        return None
+    return konec
