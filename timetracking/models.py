@@ -313,7 +313,7 @@ class WorkdaySummary(models.Model):
     # Čistá odpracovaná doba = hrube_minuty - prestavka_minuty - pohyby_minuty
     odpracovane_minuty = models.PositiveIntegerField(_("odpracované minuty"), default=0)
 
-    # Přesčas = odpracovane_minuty − (úvazek hodin × 60)
+    # Přesčas = odpracovane_minuty − denní norma (pružná: hodiny_denne × 60; pevná: čistá doba bloků toho dne)
     prescos_minuty = models.IntegerField(_("přesčas (min)"), default=0)
 
     je_svatek = models.BooleanField(_("státní svátek"), default=False)
@@ -367,6 +367,10 @@ class WorkdaySummary(models.Model):
             == TypUvazku.DruhPracovniDoby.PEVNA
         )
 
+        # Povinná přestávka po 6 hodinách
+        break_threshold = getattr(settings, "BREAK_THRESHOLD_HOURS", 6) * 60
+        mandatory_break = getattr(settings, "MANDATORY_BREAK_MINUTES", 30)
+
         if je_pevna:
             # U pevné pracovní doby se počítá jen čas ležící uvnitř bloků
             # zaškrtnutých pro daný den v týdnu — den bez zaškrtnutého bloku
@@ -389,6 +393,22 @@ class WorkdaySummary(models.Model):
                     if prekryv_do > prekryv_od:
                         hrube_minuty += int((prekryv_do - prekryv_od).total_seconds() // 60)
             pohyby_minuty = 0
+
+            # Denní norma pevné doby je čistá doba bloků toho dne — délka bloků
+            # minus povinná přestávka, tedy stejně, jako se počítá odpracovaná
+            # doba. Ne paušální hodiny_denne: pátek 7:30–15:00 (7 h čistého času)
+            # by jinak při odpracování celého bloku ukázal nedostatek a bloky
+            # po–čt 7:30–16:15 (8 h 15 min) přesčas. Den bez bloku má normu 0.
+            norma_hrube = sum(
+                int((
+                    datetime.combine(datum, blok.blok_do)
+                    - datetime.combine(datum, blok.blok_od)
+                ).total_seconds() // 60)
+                for blok in bloky_dne
+            )
+            uvazek_minut = max(
+                norma_hrube - (mandatory_break if norma_hrube > break_threshold else 0), 0
+            )
         else:
             hrube_minuty = sum(s.trvani_minut() or 0 for s in sessions)
 
@@ -435,17 +455,16 @@ class WorkdaySummary(models.Model):
                     )
                     pohyby_minuty += max(trvani - prekryv_minuty, 0)
 
-        # Povinná přestávka po 6 hodinách
-        break_threshold = getattr(settings, "BREAK_THRESHOLD_HOURS", 6) * 60
-        mandatory_break = getattr(settings, "MANDATORY_BREAK_MINUTES", 30)
         prestavka = mandatory_break if hrube_minuty > break_threshold else 0
 
         odpracovane = max(hrube_minuty - prestavka - pohyby_minuty, 0)
 
-        # Přesčas
-        uvazek_minut = int(
-            employee.typ_uvazku.hodiny_denne * Decimal("60")
-        )
+        # Přesčas / nedostatek: u pevné doby proti normě z bloků dne (výše),
+        # u pružné proti hodiny_denne úvazku.
+        if not je_pevna:
+            uvazek_minut = int(
+                employee.typ_uvazku.hodiny_denne * Decimal("60")
+            )
         prescos = odpracovane - uvazek_minut
 
         je_svatek = StatniSvatek.objects.filter(datum=datum).exists()

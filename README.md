@@ -118,7 +118,7 @@ nastaven). Vypočítává `Employee.get_schvalovatel()`.
 |----------|---------|
 | Povinná přestávka po | 6 hodinách práce |
 | Délka přestávky | 30 minut (neplatí do odpracované doby) |
-| Přesčas / nedostatek | `prescos_minuty` je podepsaná bilance (odpracováno − denní norma); kladné dny se zobrazují jako přesčas, záporné jako nedostatek — vždy zvlášť, nikdy neseskládané do jednoho čísla |
+| Přesčas / nedostatek | `prescos_minuty` je podepsaná bilance (odpracováno − denní norma; u pružné doby `hodiny_denne`, u pevné čistá doba bloků daného dne, takže odpracovaný celý blok je vždy nula); kladné dny se zobrazují jako přesčas, záporné jako nedostatek — vždy zvlášť, nikdy neseskládané do jednoho čísla |
 | Dovolená a další stavy | evidovány v hodinách (dny × hodin denně dle úvazku) |
 | Státní svátky | generovány z knihovny `holidays`, admin může upravit |
 
