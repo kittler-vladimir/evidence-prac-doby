@@ -1,3 +1,7 @@
+from datetime import datetime
+from decimal import Decimal
+
+from django.conf import settings
 from django.contrib.auth.models import AbstractUser
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
@@ -158,6 +162,30 @@ class TypUvazku(models.Model):
 
     def __str__(self):
         return f"{self.nazev} ({self.hodiny_denne}h/den)"
+
+    def norma_minut(self, datum):
+        """Denní norma v minutách pro dané datum — jediné místo, ze kterého čerpá
+        odpracovaná doba (WorkdaySummary.prepocitej) i hodiny dovolené
+        (ZadostOStav.vypocitej_hodiny), aby se nemohly rozejít.
+
+        Pružná doba: `hodiny_denne` × 60 každý den. Pevná doba: čistá doba bloků
+        zaškrtnutých pro den v týdnu `datum` — jejich délka minus povinná přestávka
+        (stejné pravidlo prahu jako u odpracované doby), 0 pro den bez bloku."""
+        if self.druh_pracovni_doby != self.DruhPracovniDoby.PEVNA:
+            return int(self.hodiny_denne * Decimal("60"))
+
+        den_pole = CasovyBlokUvazku.DNY_V_TYDNU[datum.weekday()]
+        bloky_dne = self.casove_bloky.filter(**{den_pole: True})
+        hrube = sum(
+            int((
+                datetime.combine(datum, blok.blok_do)
+                - datetime.combine(datum, blok.blok_od)
+            ).total_seconds() // 60)
+            for blok in bloky_dne
+        )
+        prah = getattr(settings, "BREAK_THRESHOLD_HOURS", 6) * 60
+        prestavka = getattr(settings, "MANDATORY_BREAK_MINUTES", 30)
+        return max(hrube - (prestavka if hrube > prah else 0), 0)
 
 
 class CasovyBlokUvazku(models.Model):

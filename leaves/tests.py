@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 from django.contrib.auth import get_user_model
@@ -7,7 +7,8 @@ from django.core.management import call_command
 from django.test import TestCase
 from django.urls import reverse
 
-from accounts.models import Employee, Oddeleni, Odbor, Sekce, TypUvazku
+from accounts.holidays_model import StatniSvatek
+from accounts.models import CasovyBlokUvazku, Employee, Oddeleni, Odbor, Sekce, TypUvazku
 from leaves.forms import ZadostOStavForm
 from leaves.models import (
     NarokDovolene,
@@ -308,3 +309,87 @@ class ObnovRocniNarokyTests(TestCase):
         call_command("obnov_rocni_naroky", rok=2026)
         zustatek = ZustatekStavu.objects.get(employee=self.employee, rok=2026, typ=self.typ_iv)
         self.assertEqual(zustatek.narok_hodin, Decimal("99.00"))
+
+
+class HodinyZadostiPodleTypuUvazkuTests(TestCase):
+    """Issue #74 — hodiny žádosti: u pevné pracovní doby čistá doba bloků daného dne
+    (stejná norma jako ve Výkazu, #72), u pružné hodiny_denne každý den Po–Pá."""
+
+    PONDELI = date(2026, 10, 5)  # po 5. – pá 9. 10. 2026 bez státního svátku
+
+    def setUp(self):
+        sekce = Sekce.objects.create(nazev="Sekce", kod="S1")
+        odbor = Odbor.objects.create(sekce=sekce, nazev="Odbor", kod="O1")
+        oddeleni = Oddeleni.objects.create(odbor=odbor, nazev="Oddělení", kod="OD1")
+        self.typ_uvazku = TypUvazku.objects.create(
+            nazev="Pevná", hodiny_denne=Decimal("8.00"), hodiny_tyydne=Decimal("40.00"),
+            druh_pracovni_doby=TypUvazku.DruhPracovniDoby.PEVNA,
+        )
+        CasovyBlokUvazku.objects.create(
+            typ_uvazku=self.typ_uvazku, blok_od="07:30", blok_do="16:15",
+            pondeli=True, utery=True, streda=True, ctvrtek=True,
+        )
+        CasovyBlokUvazku.objects.create(
+            typ_uvazku=self.typ_uvazku, blok_od="07:30", blok_do="15:00", patek=True,
+        )
+        user = User.objects.create_user(
+            username="pevny@example.com", email="pevny@example.com",
+            first_name="Pevný", last_name="Zaměstnanec",
+        )
+        self.employee = Employee.objects.create(
+            user=user, osobni_cislo="1", oddeleni=oddeleni,
+            typ_uvazku=self.typ_uvazku, datum_nastupu=date(2020, 1, 1),
+        )
+        self.typ_stavu = TypStavu.objects.create(
+            nazev="Dovolená", zkratka="DOV", odecita_ze_zustatku=True, vyzaduje_schvaleni=True,
+        )
+
+    def _hodiny(self, od, do):
+        zadost = ZadostOStav(
+            employee=self.employee, typ=self.typ_stavu, datum_od=od, datum_do=do,
+        )
+        zadost.vypocitej_hodiny()
+        return zadost.pocet_hodin
+
+    def test_pevna_cely_tyden_je_40_hodin(self):
+        self.assertEqual(
+            self._hodiny(self.PONDELI, self.PONDELI + timedelta(days=4)), Decimal("40.00")
+        )
+
+    def test_pevna_jeden_patek_je_7_hodin_a_pondeli_8_25(self):
+        self.assertEqual(self._hodiny(date(2026, 10, 9), date(2026, 10, 9)), Decimal("7.00"))
+        self.assertEqual(self._hodiny(self.PONDELI, self.PONDELI), Decimal("8.25"))
+
+    def test_pevna_svatek_se_preskoci(self):
+        StatniSvatek.objects.create(datum=date(2026, 10, 9), nazev="Svátek", zeme=self._zeme())
+        self.assertEqual(
+            self._hodiny(self.PONDELI, self.PONDELI + timedelta(days=4)), Decimal("33.00")
+        )
+
+    def test_pevna_den_bez_bloku_je_nula(self):
+        self.typ_uvazku.casove_bloky.filter(patek=True).delete()
+        self.assertEqual(self._hodiny(date(2026, 10, 9), date(2026, 10, 9)), Decimal("0.00"))
+
+    def test_zadost_pres_vikend_pocita_jen_pracovni_dny(self):
+        self.assertEqual(self._hodiny(date(2026, 10, 9), date(2026, 10, 12)), Decimal("15.25"))
+
+    def test_pruzna_ma_kazdy_den_hodiny_denne(self):
+        self.typ_uvazku.druh_pracovni_doby = TypUvazku.DruhPracovniDoby.PRUZNA
+        self.typ_uvazku.save()
+        self.assertEqual(self._hodiny(date(2026, 10, 9), date(2026, 10, 9)), Decimal("8.00"))
+        self.assertEqual(
+            self._hodiny(self.PONDELI, self.PONDELI + timedelta(days=4)), Decimal("40.00")
+        )
+
+    def test_ulozena_zadost_pouzije_nove_hodiny(self):
+        zadost = ZadostOStav.objects.create(
+            employee=self.employee, typ=self.typ_stavu,
+            datum_od=date(2026, 10, 9), datum_do=date(2026, 10, 9),
+        )
+        zadost.refresh_from_db()
+        self.assertEqual(zadost.pocet_hodin, Decimal("7.00"))
+
+    @staticmethod
+    def _zeme():
+        from accounts.holidays_model import Zeme
+        return Zeme.objects.get_or_create(kod="CZ", defaults={"nazev": "Česko"})[0]

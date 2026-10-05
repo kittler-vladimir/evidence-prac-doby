@@ -394,21 +394,9 @@ class WorkdaySummary(models.Model):
                         hrube_minuty += int((prekryv_do - prekryv_od).total_seconds() // 60)
             pohyby_minuty = 0
 
-            # Denní norma pevné doby je čistá doba bloků toho dne — délka bloků
-            # minus povinná přestávka, tedy stejně, jako se počítá odpracovaná
-            # doba. Ne paušální hodiny_denne: pátek 7:30–15:00 (7 h čistého času)
-            # by jinak při odpracování celého bloku ukázal nedostatek a bloky
-            # po–čt 7:30–16:15 (8 h 15 min) přesčas. Den bez bloku má normu 0.
-            norma_hrube = sum(
-                int((
-                    datetime.combine(datum, blok.blok_do)
-                    - datetime.combine(datum, blok.blok_od)
-                ).total_seconds() // 60)
-                for blok in bloky_dne
-            )
-            uvazek_minut = max(
-                norma_hrube - (mandatory_break if norma_hrube > break_threshold else 0), 0
-            )
+            # Denní norma pevné doby je čistá doba bloků toho dne, ne paušální
+            # hodiny_denne — viz TypUvazku.norma_minut(). Pátek 7:30–15:00 (7 h
+            # čistého času) by jinak při odpracování celého bloku ukázal nedostatek.
         else:
             hrube_minuty = sum(s.trvani_minut() or 0 for s in sessions)
 
@@ -459,13 +447,8 @@ class WorkdaySummary(models.Model):
 
         odpracovane = max(hrube_minuty - prestavka - pohyby_minuty, 0)
 
-        # Přesčas / nedostatek: u pevné doby proti normě z bloků dne (výše),
-        # u pružné proti hodiny_denne úvazku.
-        if not je_pevna:
-            uvazek_minut = int(
-                employee.typ_uvazku.hodiny_denne * Decimal("60")
-            )
-        prescos = odpracovane - uvazek_minut
+        # Přesčas / nedostatek proti denní normě úvazku (pevná doba: z bloků dne).
+        prescos = odpracovane - employee.typ_uvazku.norma_minut(datum)
 
         je_svatek = StatniSvatek.objects.filter(datum=datum).exists()
         je_vikend = datum.weekday() >= 5  # Sat=5, Sun=6
