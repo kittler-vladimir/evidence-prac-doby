@@ -1,11 +1,15 @@
 ## Description
-Clarifies the wording for #68: the auto-close end time follows the time blocks of each employee's own fixed-hours contract type (there can be several PEVNA types), not a fixed 16:15 / 15:00, and the work block is only closed together with an auto-closed movement of a flagged type.
+The Výkaz showed a shortfall on Fridays (e.g. Kittler, 2 Oct 2026) for fixed-hours (`PEVNA`) employees who worked their full block. `WorkdaySummary.prepocitej()` compared worked time against the flat `TypUvazku.hodiny_denne` (8 h), while the Friday block 7:30–15:00 is 7 h net (and Mon–Thu 7:30–16:15 is 8 h 15 min net, which showed +15 min overtime). For `PEVNA` the daily norm is now the net time of that weekday's blocks.
 
 ## Changes
-- `CHANGELOG.md`, `README.md`, `CLAUDE.md`: reworded accordingly.
-- `timetracking/tests.py`: a second PEVNA type with different blocks gets its own end time (14:30); an open work block with no movement is only flagged, never closed.
+- `timetracking/models.py`: for `PEVNA`, norm = summed length of the blocks flagged for the weekday minus the mandatory break (same threshold rule as worked time); 0 for a day without a block. `PRUZNA` still uses `hodiny_denne`.
+- `timetracking/tests.py`: full Mon block and full Fri block give balance 0, shorter work is a shortfall, a full week of blocks nets 0 and 40 h, a day without a block has norm 0, `PRUZNA` unchanged.
+- `CLAUDE.md`, `README.md`: document the per-day norm for fixed hours.
 
-## Issue
-Refs #68
+Stored `WorkdaySummary` rows are not recomputed by this change; the local dev DB's PEVNA rows were recomputed manually.
+
+## How to test
+1. Open Výkaz for an employee on fixed hours who worked a full Friday block.
+2. The day shows no shortfall and no overtime; Mon–Thu full blocks no longer show +15 min.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)

@@ -279,6 +279,53 @@ class PevnaPracovniDobaVypocetTests(TestCase):
         self.assertEqual(souhrn.hrube_minuty, 0)
         self.assertEqual(souhrn.odpracovane_minuty, 0)
 
+    def _odpracuj(self, datum, od, do):
+        WorkSession.objects.create(
+            employee=self.employee,
+            zacatek=self._cas(datum, *od),
+            konec=self._cas(datum, *do),
+        )
+        return WorkdaySummary.prepocitej(self.employee, datum)
+
+    def test_cely_pondelni_blok_je_presne_norma(self):
+        """Norma pevné doby je čistá doba bloků dne (8 h 15 min po–čt), ne paušální
+        hodiny_denne (8 h) — odpracovaný celý blok nedává přesčas."""
+        souhrn = self._odpracuj(self.pondeli, (7, 30), (16, 15))
+        self.assertEqual(souhrn.odpracovane_minuty, 495)
+        self.assertEqual(souhrn.prescos_minuty, 0)
+
+    def test_cely_patecni_blok_nedava_nedostatek(self):
+        """Pátek 7:30–15:00 je 7 h čistého času — odpracovaný celý blok je
+        vyrovnaná bilance, ne nedostatek 1 h proti 8 h denně."""
+        souhrn = self._odpracuj(self.patek, (7, 30), (15, 0))
+        self.assertEqual(souhrn.odpracovane_minuty, 420)
+        self.assertEqual(souhrn.prescos_minuty, 0)
+
+    def test_kratsi_prace_nez_blok_je_nedostatek(self):
+        souhrn = self._odpracuj(self.patek, (8, 30), (15, 0))
+        self.assertEqual(souhrn.odpracovane_minuty, 360)
+        self.assertEqual(souhrn.prescos_minuty, -60)
+
+    def test_tydenni_bilance_celych_bloku_je_nulova(self):
+        souhrny = [
+            self._odpracuj(self.pondeli + timedelta(days=i), (7, 30), (16, 15))
+            for i in range(4)
+        ] + [self._odpracuj(self.patek, (7, 30), (15, 0))]
+        self.assertEqual(sum(x.odpracovane_minuty for x in souhrny), 40 * 60)
+        self.assertEqual(sum(x.prescos_minuty for x in souhrny), 0)
+
+    def test_den_bez_bloku_ma_nulovou_normu(self):
+        souhrn = self._odpracuj(self.sobota, (8, 0), (12, 0))
+        self.assertEqual(souhrn.odpracovane_minuty, 0)
+        self.assertEqual(souhrn.prescos_minuty, 0)
+
+    def test_pruzna_doba_ma_dal_normu_hodiny_denne(self):
+        self.employee.typ_uvazku.druh_pracovni_doby = TypUvazku.DruhPracovniDoby.PRUZNA
+        self.employee.typ_uvazku.save()
+        souhrn = self._odpracuj(self.patek, (7, 30), (15, 0))
+        self.assertEqual(souhrn.odpracovane_minuty, 420)
+        self.assertEqual(souhrn.prescos_minuty, -60)  # 7 h − 8 h denně
+
 
 class SignalLokalniDatumTests(TestCase):
     """
