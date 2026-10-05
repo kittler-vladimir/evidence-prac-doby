@@ -315,7 +315,8 @@ class ZadostOStav(models.Model):
     def vypocitej_hodiny(self):
         """
         Spočítá počet hodin dovolené:
-        pracovní dny v rozsahu (bez víkendů a státních svátků) × hod/den dle úvazku.
+        pracovní dny v rozsahu (bez víkendů a státních svátků) × denní norma úvazku
+        (TypUvazku.norma_minut: pružná doba hodiny_denne, pevná čistá doba bloků dne).
         """
         from accounts.holidays_model import StatniSvatek
         from datetime import timedelta
@@ -330,15 +331,15 @@ class ZadostOStav(models.Model):
             ).values_list("datum", flat=True)
         )
 
-        hodiny_denne = self.employee.typ_uvazku.hodiny_denne
-        celkem = 0
+        typ_uvazku = self.employee.typ_uvazku
+        minuty = 0
         current = self.datum_od
         while current <= self.datum_do:
             if current.weekday() < 5 and current not in svatky:
-                celkem += hodiny_denne
+                minuty += typ_uvazku.norma_minut(current)
             current += timedelta(days=1)
 
-        self.pocet_hodin = celkem
+        self.pocet_hodin = (Decimal(minuty) / 60).quantize(Decimal("0.01"))
 
     def schval(self, schvalovatele):
         """Schválí žádost a aktualizuje zůstatek stavu."""
