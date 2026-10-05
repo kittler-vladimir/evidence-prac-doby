@@ -4,6 +4,7 @@ Přehled změn, které uživatelé v aplikaci uvidí. Nejnovější nahoře; č�
 
 ## 5. 10. 2026
 
+- U pevné pracovní doby se dovolená a další nepřítomnost počítá podle vašeho pracovního bloku daného dne – pátek tak ubere 7 hodin, ne 8 (#74)
 - U pevné pracovní doby se denní bilance teď počítá podle vašeho pracovního bloku toho dne, takže odpracovaný celý blok už neukazuje nedostatek ani přesčas (#72)
 
 ## 30. 9. 2026
