@@ -2,6 +2,10 @@
 
 Přehled změn, které uživatelé v aplikaci uvidí. Nejnovější nahoře; číslo v závorce odkazuje na issue na GitHubu.
 
+## 5. 10. 2026
+
+- U pevné pracovní doby se denní bilance teď počítá podle vašeho pracovního bloku toho dne, takže odpracovaný celý blok už neukazuje nedostatek ani přesčas (#72)
+
 ## 30. 9. 2026
 
 - Pokud u pevné pracovní doby zapomenete zapsat návrat z pohybu, u kterého je to nastaveno (např. služební cesta, lékař), aplikace ho v noci sama ukončí na konci vašeho pracovního bloku toho dne a spolu s ním zapíše i odchod (#68)
