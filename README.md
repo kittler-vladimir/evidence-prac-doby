@@ -49,6 +49,25 @@ python manage.py runserver
 
 Ve vývoji server běží na portu **8010** (viz `.claude/launch.json`), ne na výchozím 8000.
 
+### Ruční spuštění pro testery v síti
+
+Výchozí `runserver` poslouchá jen na `localhost`, takže se na něj z jiného počítače nikdo nedostane. Pro testování s dalšími lidmi:
+
+1. V `.env` povolte přístup přes jakoukoli adresu:
+   ```
+   ALLOWED_HOSTS=*
+   ```
+2. Spusťte server na všech rozhraních:
+   ```bash
+   python manage.py runserver 0.0.0.0:8010
+   ```
+3. Zjistěte IP adresu počítače (`ipconfig` → „IPv4 Address“) a pošlete testerům adresu ve tvaru `http://<IP>:8010/`.
+4. Ověřte, že se z jiného počítače otevře přihlašovací stránka `/prihlaseni/`. Když ne:
+   - **firemní proxy** — tester si v prohlížeči přidá IP adresu serveru do výjimek proxy (požadavek přes proxy vrátí 403),
+   - **Windows Firewall** — povolte příchozí spojení na port 8010 (nebo pro `python.exe`).
+
+Server běží jen, dokud je otevřený terminál a počítač nespí. Testeři pracují nad stejnou databází (`db.sqlite3`) jako vy a s `DEBUG=True` vidí při chybě detailní výpis — po testování server zastavte (Ctrl+C) a v `.env` vraťte `ALLOWED_HOSTS=localhost,127.0.0.1`.
+
 ## Celery (noční úlohy)
 
 ```bash
