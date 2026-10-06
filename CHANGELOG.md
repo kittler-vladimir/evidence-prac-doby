@@ -2,6 +2,10 @@
 
 Přehled změn, které uživatelé v aplikaci uvidí. Nejnovější nahoře; číslo v závorce odkazuje na issue na GitHubu.
 
+## 6. 10. 2026
+
+- U každého typu pohybu jde nově zvlášť nastavit, jestli se započítává do pracovní doby u pevné a u pružné pracovní doby (#78)
+
 ## 5. 10. 2026
 
 - U pevné pracovní doby se dovolená a další nepřítomnost počítá podle vašeho pracovního bloku daného dne – pátek tak ubere 7 hodin, ne 8 (#74)
