@@ -1,4 +1,4 @@
 ## Description
-Adds the user-facing CHANGELOG line for #74 (fixed-hours leave hours follow the day's block).
+Documents how to run the dev server manually for testers on the local network (`ALLOWED_HOSTS=*`, `runserver 0.0.0.0:8010`, proxy/firewall hints, and reverting afterwards).
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
