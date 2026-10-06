@@ -177,8 +177,10 @@
               <td>{{ p.zacatek|time:"H:i" }}</td>
               <td>{{ p.konec|time:"H:i"|default:"probíhá" }}</td>
               <td>
-                {% if p.typ.zapocitava_se_do_pracovni_doby %}
+                {% if p.zapocitani == "ANO" %}
                   <span class="badge bg-success">Ano</span>
+                {% elif p.zapocitani == "JADRO" %}
+                  <span class="badge bg-warning text-dark">Jen v jádrové době</span>
                 {% else %}
                   <span class="badge bg-secondary">Ne</span>
                 {% endif %}

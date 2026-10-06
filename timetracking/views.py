@@ -122,10 +122,14 @@ def dashboard(request):
             work_session=aktivni_session, konec__isnull=True
         ).first()
 
-    dnesni_pohyby = Pohyb.objects.filter(
-        work_session__employee=employee,
-        work_session__zacatek__date=dnes,
-    ).select_related("typ").order_by("zacatek")
+    dnesni_pohyby = list(
+        Pohyb.objects.filter(
+            work_session__employee=employee,
+            work_session__zacatek__date=dnes,
+        ).select_related("typ").order_by("zacatek")
+    )
+    for p in dnesni_pohyby:
+        p.zapocitani = p.typ.zapocitani_pro(employee.typ_uvazku)
 
     souhrn = WorkdaySummary.objects.filter(employee=employee, datum=dnes).first()
 

@@ -39,10 +39,10 @@ class PohybModelTests(TestCase):
     def setUp(self):
         self.employee = vytvor_zamestnance()
         self.typ_neuznavany = TypPohybu.objects.create(
-            nazev="Oběd", zkratka="OB", zapocitava_se_do_pracovni_doby=False,
+            nazev="Oběd", zkratka="OB", zapocitani_pruzna=TypPohybu.Zapocitani.NE,
         )
         self.typ_uznavany = TypPohybu.objects.create(
-            nazev="Placená přestávka", zkratka="PP", zapocitava_se_do_pracovni_doby=True,
+            nazev="Placená přestávka", zkratka="PP", zapocitani_pruzna=TypPohybu.Zapocitani.ANO,
         )
         zacatek = timezone.now().replace(hour=8, minute=0, second=0, microsecond=0)
         self.session = WorkSession.objects.create(
@@ -126,7 +126,7 @@ class PohybModelTests(TestCase):
 
 
 class PruznaPracovniDobaPohybTests(TestCase):
-    """Pohyb se 'zapocitava_se_u_pruzne_pracovni_doby' se u pružné pracovní
+    """Pohyb se 'zapocitani_pruzna' = JADRO se u pružné pracovní
     doby počítá do odpracované doby jen v jádrové (pevné) části úvazku."""
 
     def setUp(self):
@@ -140,8 +140,7 @@ class PruznaPracovniDobaPohybTests(TestCase):
         )
         self.typ = TypPohybu.objects.create(
             nazev="Placená přestávka", zkratka="PP",
-            zapocitava_se_do_pracovni_doby=True,
-            zapocitava_se_u_pruzne_pracovni_doby=True,
+            zapocitani_pruzna=TypPohybu.Zapocitani.JADRO,
         )
         # Sestaveno přes make_aware/combine (ne .replace() na aware "now"),
         # aby čas 07:00 byl skutečně lokální čas 07:00 a ne 07:00 UTC, které
@@ -153,6 +152,32 @@ class PruznaPracovniDobaPohybTests(TestCase):
             employee=self.employee, zacatek=zacatek,
             konec=zacatek + timedelta(hours=9),
         )
+
+    def test_zapocitani_ano_se_neodecita_ani_mimo_jadro(self):
+        """„Započítává se“ u pružné doby: pohyb mimo jádro (7:00–9:00) se neodečte vůbec."""
+        typ = TypPohybu.objects.create(
+            nazev="Placená přestávka", zkratka="PX",
+            zapocitani_pruzna=TypPohybu.Zapocitani.ANO,
+        )
+        Pohyb.objects.create(
+            work_session=self.session, typ=typ,
+            zacatek=self.session.zacatek, konec=self.session.zacatek + timedelta(hours=2),
+        )
+        souhrn = WorkdaySummary.prepocitej(self.employee, self.session.zacatek.date())
+        self.assertEqual(souhrn.pohyby_minuty, 0)
+
+    def test_zapocitani_ne_odecte_cely_pohyb_i_uvnitr_jadra(self):
+        """„Nezapočítává se“ u pružné doby: pohyb 10:00–11:00 uvnitř jádra se odečte celý."""
+        typ = TypPohybu.objects.create(
+            nazev="Lékař", zkratka="LX", zapocitani_pruzna=TypPohybu.Zapocitani.NE,
+        )
+        Pohyb.objects.create(
+            work_session=self.session, typ=typ,
+            zacatek=self.session.zacatek + timedelta(hours=3),
+            konec=self.session.zacatek + timedelta(hours=4),
+        )
+        souhrn = WorkdaySummary.prepocitej(self.employee, self.session.zacatek.date())
+        self.assertEqual(souhrn.pohyby_minuty, 60)
 
     def test_pohyb_cely_uvnitr_jadra_se_neodecita(self):
         Pohyb.objects.create(
@@ -254,11 +279,11 @@ class PevnaPracovniDobaVypocetTests(TestCase):
         self.assertEqual(souhrn.hrube_minuty, 450)  # 7h30min, ne 8h45min jako po-čt
         self.assertEqual(souhrn.odpracovane_minuty, 420)
 
-    def test_pohyb_uvnitr_bloku_se_nikdy_neodecita(self):
-        """Na rozdíl od pružné pracovní doby se u pevné pohyby neodečítají
-        vůbec — bez ohledu na TypPohybu.zapocitava_se_do_pracovni_doby."""
+    def test_pohyb_se_zapocitanim_pevna_ano_se_neodecita(self):
+        """Výchozí „započítává se“ u pevné doby: pohyb uvnitř bloku odpracovanou
+        dobu nesnižuje, i když u pružné doby by se odečetl (zapocitani_pruzna=NE)."""
         typ = TypPohybu.objects.create(
-            nazev="Oběd", zkratka="OB", zapocitava_se_do_pracovni_doby=False,
+            nazev="Oběd", zkratka="OB", zapocitani_pruzna=TypPohybu.Zapocitani.NE,
         )
         session = WorkSession.objects.create(
             employee=self.employee,
@@ -273,6 +298,50 @@ class PevnaPracovniDobaVypocetTests(TestCase):
         souhrn = WorkdaySummary.prepocitej(self.employee, self.pondeli)
         self.assertEqual(souhrn.pohyby_minuty, 0)
         self.assertEqual(souhrn.odpracovane_minuty, 495)
+
+    def _pohyb_v_poledne(self, zapocitani_pevna, od=(12, 0), do=(12, 30)):
+        typ = TypPohybu.objects.create(
+            nazev="Lékař", zkratka="LE", zapocitani_pevna=zapocitani_pevna,
+        )
+        session = WorkSession.objects.create(
+            employee=self.employee,
+            zacatek=self._cas(self.pondeli, 7, 30),
+            konec=self._cas(self.pondeli, 16, 15),
+        )
+        Pohyb.objects.create(
+            work_session=session, typ=typ,
+            zacatek=self._cas(self.pondeli, *od), konec=self._cas(self.pondeli, *do),
+        )
+        return WorkdaySummary.prepocitej(self.employee, self.pondeli)
+
+    def test_pohyb_se_zapocitanim_pevna_ne_odecte_cast_uvnitr_bloku(self):
+        souhrn = self._pohyb_v_poledne(TypPohybu.Zapocitani.NE)
+        self.assertEqual(souhrn.pohyby_minuty, 30)
+        self.assertEqual(souhrn.odpracovane_minuty, 465)  # 525 − 30 přestávka − 30 pohyb
+        self.assertEqual(souhrn.prescos_minuty, -30)
+
+    def test_pohyb_se_zapocitanim_pevna_ne_odecte_jen_cast_v_bloku(self):
+        """Pohyb 6:30–8:30 začíná před blokem (7:30) — odečte se jen hodina uvnitř něj."""
+        souhrn = self._pohyb_v_poledne(TypPohybu.Zapocitani.NE, od=(7, 0), do=(8, 30))
+        self.assertEqual(souhrn.pohyby_minuty, 60)
+
+    def test_pohyb_se_zapocitanim_pevna_ne_cely_mimo_blok_se_neodecte(self):
+        souhrn = self._pohyb_v_poledne(TypPohybu.Zapocitani.NE, od=(16, 15), do=(16, 15))
+        self.assertEqual(souhrn.pohyby_minuty, 0)
+
+    def test_zapocitani_pro_vybere_volbu_podle_druhu_pracovni_doby(self):
+        typ = TypPohybu.objects.create(
+            nazev="Lékař", zkratka="LE",
+            zapocitani_pevna=TypPohybu.Zapocitani.ANO,
+            zapocitani_pruzna=TypPohybu.Zapocitani.NE,
+        )
+        pevny = self.employee.typ_uvazku
+        pruzny = TypUvazku.objects.create(
+            nazev="Pružná", hodiny_denne=8, hodiny_tyydne=40,
+            druh_pracovni_doby=TypUvazku.DruhPracovniDoby.PRUZNA,
+        )
+        self.assertEqual(typ.zapocitani_pro(pevny), TypPohybu.Zapocitani.ANO)
+        self.assertEqual(typ.zapocitani_pro(pruzny), TypPohybu.Zapocitani.NE)
 
     def test_den_bez_session_neni_ovlivnen(self):
         souhrn = WorkdaySummary.prepocitej(self.employee, self.pondeli)
@@ -464,7 +533,7 @@ class ClockOutBlockedByOpenPohybTests(TestCase):
     def setUp(self):
         self.employee = vytvor_zamestnance()
         self.typ = TypPohybu.objects.create(
-            nazev="Oběd", zkratka="OB", zapocitava_se_do_pracovni_doby=False,
+            nazev="Oběd", zkratka="OB", zapocitani_pruzna=TypPohybu.Zapocitani.NE,
         )
         self.client = Client()
         self.client.force_login(self.employee.user)
@@ -743,7 +812,7 @@ class CasAkciDochazkyTests(TestCase):
     def setUp(self):
         self.employee = vytvor_zamestnance()
         self.typ = TypPohybu.objects.create(
-            nazev="Oběd", zkratka="OB", zapocitava_se_do_pracovni_doby=False,
+            nazev="Oběd", zkratka="OB", zapocitani_pruzna=TypPohybu.Zapocitani.NE,
         )
         self.client = Client()
         self.client.force_login(self.employee.user)
@@ -971,7 +1040,7 @@ class StejnaMinutaJakoNavazujiciZaznamTests(TestCase):
     def setUp(self):
         self.employee = vytvor_zamestnance()
         self.typ = TypPohybu.objects.create(
-            nazev="Oběd", zkratka="OB", zapocitava_se_do_pracovni_doby=False,
+            nazev="Oběd", zkratka="OB", zapocitani_pruzna=TypPohybu.Zapocitani.NE,
         )
         self.client = Client()
         self.client.force_login(self.employee.user)
@@ -1093,7 +1162,7 @@ class MistniCasOpravFormularuAStrTests(TestCase):
     def setUp(self):
         self.employee = vytvor_zamestnance()
         self.typ = TypPohybu.objects.create(
-            nazev="Oběd", zkratka="OB", zapocitava_se_do_pracovni_doby=False,
+            nazev="Oběd", zkratka="OB", zapocitani_pruzna=TypPohybu.Zapocitani.NE,
         )
         # 12:00 UTC v lednu = 13:00 CET (+1h), v červnu = 14:00 CEST (+2h).
         self.zacatek_cet_utc = datetime(2026, 1, 15, 12, 0, tzinfo=dt_timezone.utc)
@@ -1424,7 +1493,7 @@ class UkonceniPohybuNaKonciBlokuTests(TestCase):
         )
         self.lekar = TypPohybu.objects.create(
             nazev="Lékař", zkratka="Lekar",
-            zapocitava_se_do_pracovni_doby=True, ukoncit_na_konec_bloku=True,
+            zapocitani_pruzna=TypPohybu.Zapocitani.ANO, ukoncit_na_konec_bloku=True,
         )
         self.obed = TypPohybu.objects.create(nazev="Oběd", zkratka="Obed")
         dnes = timezone.localdate()
