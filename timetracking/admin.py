@@ -16,9 +16,9 @@ class TypPohybuAdmin(admin.ModelAdmin):
     list_display = [
         "zkratka",
         "nazev",
-        "zapocitava_se_do_pracovni_doby",
+        "zapocitani_pevna",
+        "zapocitani_pruzna",
         "zobrazuje_se_na_pracovisti",
-        "zapocitava_se_u_pruzne_pracovni_doby",
         "ukoncit_na_konec_bloku",
         "aktivni",
     ]

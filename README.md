@@ -109,13 +109,17 @@ nastaven). Vypočítává `Employee.get_schvalovatel()`.
 
 - `WorkSession` — jeden blok příchod/odchod. Uvnitř probíhajícího bloku lze
   evidovat `Pohyb` (oběd, lékař, soukromá záležitost...) podle číselníku
-  `TypPohybu`, který určuje, zda se doba pohybu započítává do odpracované
-  doby, zda zaměstnanec zůstává veden jako přítomný na pracovišti, a zda se
-  u pružné pracovní doby započítává jen v rámci jádrové doby.
+  `TypPohybu`, který zvlášť pro pevnou a pro pružnou pracovní dobu určuje, zda
+  se doba pohybu započítává do odpracované doby (u pružné doby i „jen v jádrové
+  době“), a zda zaměstnanec zůstává veden jako přítomný na pracovišti.
+  Nastavuje se v administraci u každého typu pohybu (sloupce „započítání u pevné
+  / pružné pracovní doby“).
 - U **pevné pracovní doby** (`TypUvazku.druh_pracovni_doby = PEVNA`) se
   odpracovaná doba počítá jen v rámci časových bloků (`CasovyBlokUvazku`)
   zaškrtnutých pro daný den v týdnu — čas mimo blok se nezapočítá vůbec
-  (ani jako práce, ani jako přesčas/nedostatek) a pohyby se u ní neodečítají.
+  (ani jako práce, ani jako přesčas/nedostatek); pohyby se u ní neodečítají, pokud
+  typ pohybu nemá u pevné doby nastaveno „nezapočítává se“ (pak se odečte část
+  uvnitř bloku).
   Den bez zaškrtnutého bloku dá 0 odpracovaných minut.
 - `WorkdaySummary` je odvozený denní souhrn — nikdy se nezapisuje přímo,
   přepočítá se signálem po každé změně `WorkSession`/`Pohyb`.
