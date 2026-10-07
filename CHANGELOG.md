@@ -2,6 +2,10 @@
 
 Přehled změn, které uživatelé v aplikaci uvidí. Nejnovější nahoře; číslo v závorce odkazuje na issue na GitHubu.
 
+## 7. 10. 2026
+
+- Dva pracovní bloky těsně za sebou (např. konec 11:17 a začátek 11:18) se počítají jako jeden souvislý blok, takže se už neztrácí minuta (#80)
+
 ## 6. 10. 2026
 
 - U každého typu pohybu jde nově zvlášť nastavit, jestli se započítává do pracovní doby u pevné a u pružné pracovní doby (#78)
