@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 from django.db import models
 from django.utils import timezone
@@ -411,6 +411,18 @@ class WorkdaySummary(models.Model):
             od, do = max(od1, od2), min(do1, do2)
             return int((do - od).total_seconds() // 60) if do > od else 0
 
+        # Bloky, mezi nimiž je mezera jen jedna minuta (konec 11:17, další začátek
+        # 11:18), jsou jeden souvislý blok — zaměstnanec odešel a přišel hned,
+        # čas se zapisuje na minuty a ta jedna minuta mezi nimi se nemá ztratit.
+        intervaly = []
+        for s in sorted(sessions, key=lambda x: x.zacatek):
+            minuta_zacatku = s.zacatek.replace(second=0, microsecond=0)
+            minuta_konce = intervaly[-1][1].replace(second=0, microsecond=0) if intervaly else None
+            if intervaly and minuta_zacatku - minuta_konce <= timedelta(minutes=1):
+                intervaly[-1][1] = max(intervaly[-1][1], s.konec)
+            else:
+                intervaly.append([s.zacatek, s.konec])
+
         pohyby_minuty = 0
 
         if je_pevna:
@@ -429,8 +441,8 @@ class WorkdaySummary(models.Model):
                 )
             ]
             hrube_minuty = sum(
-                prekryv_minut(s.zacatek, s.konec, blok_od, blok_do)
-                for s in sessions
+                prekryv_minut(od, do, blok_od, blok_do)
+                for od, do in intervaly
                 for blok_od, blok_do in bloky_dne
             )
 
@@ -447,7 +459,7 @@ class WorkdaySummary(models.Model):
             # hodiny_denne — viz TypUvazku.norma_minut(). Pátek 7:30–15:00 (7 h
             # čistého času) by jinak při odpracování celého bloku ukázal nedostatek.
         else:
-            hrube_minuty = sum(s.trvani_minut() or 0 for s in sessions)
+            hrube_minuty = sum(int((do - od).total_seconds() // 60) for od, do in intervaly)
 
             # Pružná doba: „nezapočítává se“ odečte celý pohyb stejně jako povinnou
             # přestávku, „započítává se“ ho neodečte vůbec a „jen v jádrové době“

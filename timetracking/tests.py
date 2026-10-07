@@ -343,6 +343,34 @@ class PevnaPracovniDobaVypocetTests(TestCase):
         self.assertEqual(typ.zapocitani_pro(pevny), TypPohybu.Zapocitani.ANO)
         self.assertEqual(typ.zapocitani_pro(pruzny), TypPohybu.Zapocitani.NE)
 
+    def test_bloky_s_mezerou_jedne_minuty_jsou_souvisly_blok(self):
+        """Konec 15:17 a další začátek 15:18 je jeden souvislý blok — minuta
+        mezi nimi se neztratí (celé 7:30–16:15 = norma, bilance 0)."""
+        WorkSession.objects.create(
+            employee=self.employee,
+            zacatek=self._cas(self.pondeli, 7, 11), konec=self._cas(self.pondeli, 15, 17),
+        )
+        WorkSession.objects.create(
+            employee=self.employee,
+            zacatek=self._cas(self.pondeli, 15, 18), konec=self._cas(self.pondeli, 16, 15),
+        )
+        souhrn = WorkdaySummary.prepocitej(self.employee, self.pondeli)
+        self.assertEqual(souhrn.hrube_minuty, 525)
+        self.assertEqual(souhrn.odpracovane_minuty, 495)
+        self.assertEqual(souhrn.prescos_minuty, 0)
+
+    def test_bloky_s_mezerou_dvou_minut_zustavaji_oddelene(self):
+        WorkSession.objects.create(
+            employee=self.employee,
+            zacatek=self._cas(self.pondeli, 7, 30), konec=self._cas(self.pondeli, 15, 17),
+        )
+        WorkSession.objects.create(
+            employee=self.employee,
+            zacatek=self._cas(self.pondeli, 15, 19), konec=self._cas(self.pondeli, 16, 15),
+        )
+        souhrn = WorkdaySummary.prepocitej(self.employee, self.pondeli)
+        self.assertEqual(souhrn.hrube_minuty, 523)  # 467 + 56, mezera 15:17–15:19 se nepočítá
+
     def test_den_bez_session_neni_ovlivnen(self):
         souhrn = WorkdaySummary.prepocitej(self.employee, self.pondeli)
         self.assertEqual(souhrn.hrube_minuty, 0)
@@ -1631,3 +1659,41 @@ class UkonceniPohybuNaKonciBlokuTests(TestCase):
         self._obnov(session, pohyb)
         self.assertIsNone(pohyb.konec)
         self.assertIsNone(session.konec)
+
+
+class SouvisleBlokyPruznaDobaTests(TestCase):
+    """Bloky s mezerou nejvýše jedné minuty (konec 11:17, začátek 11:18) se
+    u pružné pracovní doby počítají jako jeden souvislý blok."""
+
+    def setUp(self):
+        self.employee = vytvor_zamestnance()
+        self.employee.typ_uvazku.druh_pracovni_doby = TypUvazku.DruhPracovniDoby.PRUZNA
+        self.employee.typ_uvazku.save()
+        self.den = timezone.localdate()
+
+    def _blok(self, od, do, sekundy_od=0):
+        return WorkSession.objects.create(
+            employee=self.employee,
+            zacatek=timezone.make_aware(datetime.combine(self.den, time(*od, sekundy_od))),
+            konec=timezone.make_aware(datetime.combine(self.den, time(*do))),
+        )
+
+    def test_mezera_jedne_minuty_se_neztrati(self):
+        self._blok((8, 0), (11, 17))
+        self._blok((11, 18), (16, 0))
+        souhrn = WorkdaySummary.prepocitej(self.employee, self.den)
+        self.assertEqual(souhrn.hrube_minuty, 480)  # 8:00–16:00 bez ztráty minuty
+
+    def test_mezera_s_vterinami_v_okamziku_prichodu_je_stale_souvisla(self):
+        """Příchod kliknutím v 11:18:40 po odchodu zadaném na 11:17 — na displeji
+        sousední minuty."""
+        self._blok((8, 0), (11, 17))
+        self._blok((11, 18), (16, 0), sekundy_od=40)
+        souhrn = WorkdaySummary.prepocitej(self.employee, self.den)
+        self.assertEqual(souhrn.hrube_minuty, 480)
+
+    def test_mezera_dvou_minut_se_nepocita(self):
+        self._blok((8, 0), (11, 17))
+        self._blok((11, 19), (16, 0))
+        souhrn = WorkdaySummary.prepocitej(self.employee, self.den)
+        self.assertEqual(souhrn.hrube_minuty, 197 + 281)
