@@ -4,6 +4,7 @@ Přehled změn, které uživatelé v aplikaci uvidí. Nejnovější nahoře; č�
 
 ## 7. 10. 2026
 
+- Ve Výkazu a v přehledu Odbor si můžete zvolit měsíc a rok – šipkami nebo výběrem, výchozí je aktuální měsíc (#87)
 - Odkaz „Ke schválení“ teď vidí každý, kdo žádosti schvaluje – i vedoucí odboru a zástupci, ne jen vedoucí oddělení (#85)
 - Dovolenou můžete nově zadat i po hodinách (čas od–do) – hodiny se odečtou ze zůstatku a započítají se do denní normy ve výkazu (#82)
 - Dva pracovní bloky těsně za sebou (např. konec 11:17 a začátek 11:18) se počítají jako jeden souvislý blok, takže se už neztrácí minuta (#80)
