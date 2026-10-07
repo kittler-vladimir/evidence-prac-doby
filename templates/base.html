@@ -50,7 +50,7 @@
           </a>
         </li>
         {% endif %}
-        {% if user.employee.oddeleni.vedouci == user.employee or user.is_staff %}
+        {% if user.employee.schvaluje_zadosti or user.is_staff %}
         <li class="nav-item">
           <a class="nav-link" href="{% url 'leaves:ke_schvaleni' %}">
             <i class="bi bi-check2-circle"></i> Ke schválení

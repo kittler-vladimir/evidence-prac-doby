@@ -5,6 +5,7 @@ from django.conf import settings
 from django.contrib.auth.models import AbstractUser
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
+from django.utils.functional import cached_property
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
@@ -621,6 +622,20 @@ class Employee(models.Model):
         if kandidat.zastupce_id and kandidat.zastupce_id != self.pk and kandidat.je_nepritomen():
             return kandidat.zastupce
         return kandidat
+
+    @cached_property
+    def schvaluje_zadosti(self):
+        """Může tento zaměstnanec schvalovat žádosti? Je vedoucí oddělení, odboru nebo
+        sekce, zastupuje někoho, nebo už na něm nějaká žádost čeká. Řídí zobrazení
+        odkazu „Ke schválení“ — vedoucí odboru či sekce nemusí být vedoucím žádného
+        oddělení, a přesto schvaluje žádosti svých podřízených."""
+        return (
+            Oddeleni.objects.filter(vedouci=self).exists()
+            or Odbor.objects.filter(vedouci=self).exists()
+            or Sekce.objects.filter(vedouci=self).exists()
+            or self.zastupovani_za.exists()
+            or self.ke_schvaleni.filter(stav="ceka").exists()
+        )
 
     def get_schvalovatel(self):
         """
