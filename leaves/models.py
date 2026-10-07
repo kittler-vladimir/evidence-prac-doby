@@ -304,6 +304,10 @@ class ZadostOStav(models.Model):
         verbose_name=_("schválil"),
     )
     schvaleno_kdy = models.DateTimeField(_("schváleno kdy"), null=True, blank=True)
+    samoschvaleno = models.BooleanField(
+        _("schváleno vlastní osobou"), default=False,
+        help_text=_("Schvalovatel schválil vlastní žádost ve výjimečném případě (důvod je v poznámce schvalovatele)."),
+    )
     poznamka_zamestnance = models.TextField(_("poznámka zaměstnance"), blank=True)
     poznamka_schvalovatele = models.TextField(_("poznámka schvalovatele"), blank=True)
     vytvoreno = models.DateTimeField(_("vytvořeno"), auto_now_add=True)
@@ -508,8 +512,20 @@ class ZadostOStav(models.Model):
         minuty = sum(self.hodiny_po_dnech().values())
         self.pocet_hodin = (Decimal(minuty) / 60).quantize(Decimal("0.01"))
 
-    def schval(self, schvalovatele):
-        """Schválí žádost a aktualizuje zůstatek stavu."""
+    def muze_schvalit_sam(self, employee):
+        """Smí `employee` schválit tuto žádost sám sobě (#90)? Jen vlastní čekající žádost
+        zaměstnance, který jinak schvaluje žádosti (vedoucí, zástupce)."""
+        return bool(
+            employee
+            and self.employee_id == employee.pk
+            and self.stav == self.Stav.CEKA
+            and self.typ.vyzaduje_schvaleni
+            and employee.schvaluje_zadosti
+        )
+
+    def schval(self, schvalovatele, samoschvaleno=False, duvod=""):
+        """Schválí žádost a aktualizuje zůstatek stavu. Při `samoschvaleno` se uloží
+        důvod do poznámky schvalovatele a žádost se tak označí (#90)."""
         zustatek = None
         if self.typ.odecita_ze_zustatku:
             rok = self.datum_od.year
@@ -531,6 +547,9 @@ class ZadostOStav(models.Model):
         self.stav = self.Stav.SCHVALENO
         self.schvaleno_kym = schvalovatele
         self.schvaleno_kdy = timezone.now()
+        if samoschvaleno:
+            self.samoschvaleno = True
+            self.poznamka_schvalovatele = duvod
         self.save()
 
         if zustatek:

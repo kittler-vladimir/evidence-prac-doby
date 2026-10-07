@@ -67,6 +67,8 @@ def notifikace_zadost(sender, instance, created, **kwargs):
 
     # Při změně stavu
     if zadost.stav == ZadostOStav.Stav.SCHVALENO:
+        if zadost.samoschvaleno:
+            return  # schválil si to sám — e-mail sám sobě nedává smysl (#90)
         _posli_email(
             subject=f"Vaše žádost o {zadost.typ.nazev.lower()} byla schválena",
             template="leaves/emails/schvaleno.txt",

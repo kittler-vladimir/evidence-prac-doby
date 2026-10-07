@@ -743,3 +743,178 @@ class OdkazKeSchvaleniTests(TestCase):
             datum_do=date(2026, 10, 9), schvalovatele=self.radovy,
         )
         self.assertIn(reverse("leaves:ke_schvaleni"), self._odkaz(self.radovy))
+
+
+class SamoschvaleniZadostiTests(TestCase):
+    """#90 — schvalovatel (vedoucí, zástupce) si ve výjimečném případě schválí vlastní
+    čekající žádost; povinný důvod, označení v detailu, bez e-mailu."""
+
+    def setUp(self):
+        self.sekce = Sekce.objects.create(nazev="Sekce", kod="S1")
+        self.odbor = Odbor.objects.create(sekce=self.sekce, nazev="Odbor", kod="O1")
+        self.oddeleni = Oddeleni.objects.create(odbor=self.odbor, nazev="Oddělení", kod="OD1")
+        self.vedeni = Oddeleni.objects.create(odbor=self.odbor, nazev="Vedení", kod="OD2")
+        self.typ_uvazku = TypUvazku.objects.create(
+            nazev="Plný", hodiny_denne=Decimal("8.00"), hodiny_tyydne=Decimal("40.00"),
+        )
+        self.vedouci = self._zamestnanec("vedouci@example.com", "1", self.oddeleni)
+        self.reditel_odboru = self._zamestnanec("odbor@example.com", "2", self.vedeni)
+        self.radovy = self._zamestnanec("radovy@example.com", "3", self.oddeleni)
+        self.oddeleni.vedouci = self.vedouci
+        self.oddeleni.save()
+        self.odbor.vedouci = self.reditel_odboru
+        self.odbor.save()
+
+        self.typ = TypStavu.objects.create(
+            nazev="Dovolená", zkratka="DOV", je_dovolena=True, odecita_ze_zustatku=True,
+            kategorie_pro_prehled=TypStavu.KategoriePrehled.DOVOLENA,
+        )
+        NarokDovolene.objects.create(hodin=Decimal("160.00"), platne_od=date(2026, 1, 1))
+
+    def _zamestnanec(self, email, cislo, oddeleni):
+        user = User.objects.create_user(
+            username=email, email=email, first_name="Jan", last_name=cislo,
+        )
+        return Employee.objects.create(
+            user=user, osobni_cislo=cislo, oddeleni=oddeleni,
+            typ_uvazku=self.typ_uvazku, datum_nastupu=date(2020, 1, 1),
+        )
+
+    def _zadost(self, employee, **kwargs):
+        return ZadostOStav.objects.create(
+            employee=employee, typ=self.typ,
+            datum_od=date(2026, 10, 9), datum_do=date(2026, 10, 9), **kwargs,
+        )
+
+    def _schval_sam(self, employee, zadost, duvod="Ředitelka je mimo kancelář"):
+        self.client.force_login(employee.user)
+        return self.client.post(
+            reverse("leaves:schvalit_sam", args=[zadost.pk]), {"duvod": duvod},
+        )
+
+    def test_vedouci_oddeleni_si_schvali_vlastni_zadost_s_duvodem(self):
+        zadost = self._zadost(self.vedouci)
+        self.assertEqual(zadost.schvalovatele, self.reditel_odboru)
+
+        odpoved = self._schval_sam(self.vedouci, zadost)
+
+        self.assertRedirects(odpoved, reverse("leaves:detail_zadosti", args=[zadost.pk]))
+        zadost.refresh_from_db()
+        self.assertEqual(zadost.stav, ZadostOStav.Stav.SCHVALENO)
+        self.assertTrue(zadost.samoschvaleno)
+        self.assertEqual(zadost.schvaleno_kym, self.vedouci)
+        self.assertEqual(zadost.poznamka_schvalovatele, "Ředitelka je mimo kancelář")
+        self.assertIsNotNone(zadost.schvaleno_kdy)
+
+    def test_zustatek_se_odecte_prave_jednou(self):
+        zadost = self._zadost(self.vedouci)
+        self._schval_sam(self.vedouci, zadost)
+        self._schval_sam(self.vedouci, zadost)  # druhý pokus: už vyřízeno
+        zustatek = ZustatekStavu.objects.get(employee=self.vedouci, rok=2026, typ=self.typ)
+        self.assertEqual(zustatek.cerpano_hodin, Decimal("8.00"))
+
+    def test_prazdny_duvod_se_odmitne_a_zadost_zustane_cekajici(self):
+        zadost = self._zadost(self.vedouci)
+        for duvod in ("", "   "):
+            odpoved = self._schval_sam(self.vedouci, zadost, duvod=duvod)
+            self.assertEqual(odpoved.status_code, 302)
+        zadost.refresh_from_db()
+        self.assertEqual(zadost.stav, ZadostOStav.Stav.CEKA)
+        self.assertFalse(zadost.samoschvaleno)
+        odpoved = self.client.get(reverse("leaves:detail_zadosti", args=[zadost.pk]))
+        self.assertContains(odpoved, "Uveďte důvod samoschválení.")
+
+    def test_radovy_zamestnanec_nema_v_detailu_moznost_a_post_je_odmitnut(self):
+        zadost = self._zadost(self.radovy)
+        self.client.force_login(self.radovy.user)
+        odpoved = self.client.get(reverse("leaves:detail_zadosti", args=[zadost.pk]))
+        self.assertNotContains(odpoved, "Schválit sám")
+        self.assertNotContains(odpoved, reverse("leaves:schvalit_sam", args=[zadost.pk]))
+
+        self.assertEqual(self._schval_sam(self.radovy, zadost).status_code, 403)
+        zadost.refresh_from_db()
+        self.assertEqual(zadost.stav, ZadostOStav.Stav.CEKA)
+
+    def test_cizi_zadost_si_schvalovatel_timto_neschvali(self):
+        zadost = self._zadost(self.radovy)
+        self.assertEqual(zadost.schvalovatele, self.vedouci)
+        self.assertEqual(self._schval_sam(self.vedouci, zadost).status_code, 403)
+        zadost.refresh_from_db()
+        self.assertEqual(zadost.stav, ZadostOStav.Stav.CEKA)
+
+    def test_uz_vyrizena_zadost_zustane_beze_zmeny(self):
+        zadost = self._zadost(self.vedouci)
+        zadost.zamitni(self.reditel_odboru, poznamka="Ne")
+        self._schval_sam(self.vedouci, zadost)
+        zadost.refresh_from_db()
+        self.assertEqual(zadost.stav, ZadostOStav.Stav.ZAMITNUTO)
+        self.assertFalse(zadost.samoschvaleno)
+
+    def test_reditel_sekce_bez_schvalovatele_se_schvali_sam(self):
+        # Odbor bez vedoucího → žádný nadřízený kromě (jeho vlastní) sekce.
+        odbor_sekce = Odbor.objects.create(sekce=self.sekce, nazev="Odbor ředitele", kod="O9")
+        oddeleni_sekce = Oddeleni.objects.create(odbor=odbor_sekce, nazev="Kabinet", kod="OD9")
+        reditel_sekce = self._zamestnanec("sekce@example.com", "9", oddeleni_sekce)
+        self.sekce.vedouci = reditel_sekce
+        self.sekce.save()
+        zadost = self._zadost(reditel_sekce)
+        self.assertIsNone(zadost.schvalovatele)
+
+        self._schval_sam(reditel_sekce, zadost)
+
+        zadost.refresh_from_db()
+        self.assertEqual(zadost.stav, ZadostOStav.Stav.SCHVALENO)
+        self.assertTrue(zadost.samoschvaleno)
+
+    def test_hodinova_zadost_se_schvali_sam_a_odecte_hodiny(self):
+        zadost = self._zadost(self.vedouci, cas_od=time(11, 0), cas_do=time(15, 0))
+        self._schval_sam(self.vedouci, zadost)
+        zustatek = ZustatekStavu.objects.get(employee=self.vedouci, rok=2026, typ=self.typ)
+        self.assertEqual(zustatek.cerpano_hodin, Decimal("4.00"))
+
+    def test_zadost_zmizi_nadrizenemu_z_ke_schvaleni(self):
+        zadost = self._zadost(self.vedouci)
+        adresa = reverse("leaves:detail_zadosti", args=[zadost.pk])
+        self.client.force_login(self.reditel_odboru.user)
+        self.assertContains(self.client.get(reverse("leaves:ke_schvaleni")), adresa)
+        self._schval_sam(self.vedouci, zadost)
+        self.client.force_login(self.reditel_odboru.user)
+        self.assertNotContains(self.client.get(reverse("leaves:ke_schvaleni")), adresa)
+
+    def test_detail_ukaze_oznaceni_a_duvod_i_nadrizenemu(self):
+        zadost = self._zadost(self.vedouci)
+        self._schval_sam(self.vedouci, zadost)
+        self.client.force_login(self.reditel_odboru.user)
+        odpoved = self.client.get(reverse("leaves:detail_zadosti", args=[zadost.pk]))
+        self.assertContains(odpoved, "Schváleno vlastní osobou")
+        self.assertContains(odpoved, "Důvod samoschválení")
+        self.assertContains(odpoved, "Ředitelka je mimo kancelář")
+
+    def test_vedouci_vidi_tlacitko_u_vlastni_cekajici_zadosti(self):
+        zadost = self._zadost(self.vedouci)
+        self.client.force_login(self.vedouci.user)
+        odpoved = self.client.get(reverse("leaves:detail_zadosti", args=[zadost.pk]))
+        self.assertContains(odpoved, "Schválit sám")
+
+    def test_samoschvaleni_neposila_email_zadatelovi(self):
+        from django.core import mail
+
+        zadost = self._zadost(self.vedouci)
+        mail.outbox.clear()
+        self._schval_sam(self.vedouci, zadost)
+        self.assertEqual(mail.outbox, [])
+
+    def test_normalni_schvaleni_nadrizenym_neni_oznaceno_jako_samoschvaleni(self):
+        zadost = self._zadost(self.vedouci)
+        self.client.force_login(self.reditel_odboru.user)
+        self.client.post(reverse("leaves:schvalit", args=[zadost.pk]))
+        zadost.refresh_from_db()
+        self.assertEqual(zadost.stav, ZadostOStav.Stav.SCHVALENO)
+        self.assertFalse(zadost.samoschvaleno)
+
+    def test_get_na_schvalit_sam_nic_neschvali(self):
+        zadost = self._zadost(self.vedouci)
+        self.client.force_login(self.vedouci.user)
+        self.client.get(reverse("leaves:schvalit_sam", args=[zadost.pk]))
+        zadost.refresh_from_db()
+        self.assertEqual(zadost.stav, ZadostOStav.Stav.CEKA)

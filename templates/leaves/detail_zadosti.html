@@ -38,7 +38,12 @@
           {% endif %}
 
           <dt class="col-sm-4">Schvalovatel</dt>
-          <dd class="col-sm-8">{{ zadost.schvalovatele.jmeno|default:"—" }}</dd>
+          <dd class="col-sm-8">{% if zadost.samoschvaleno %}{{ zadost.schvaleno_kym.jmeno }} (sám){% else %}{{ zadost.schvalovatele.jmeno|default:"—" }}{% endif %}</dd>
+
+          {% if zadost.samoschvaleno %}
+          <dt class="col-sm-4">Schválení</dt>
+          <dd class="col-sm-8"><span class="badge bg-info text-dark">Schváleno vlastní osobou</span></dd>
+          {% endif %}
 
           {% if zadost.poznamka_zamestnance %}
           <dt class="col-sm-4">Poznámka zaměstnance</dt>
@@ -46,7 +51,7 @@
           {% endif %}
 
           {% if zadost.poznamka_schvalovatele %}
-          <dt class="col-sm-4">Poznámka schvalovatele</dt>
+          <dt class="col-sm-4">{% if zadost.samoschvaleno %}Důvod samoschválení{% else %}Poznámka schvalovatele{% endif %}</dt>
           <dd class="col-sm-8">{{ zadost.poznamka_schvalovatele }}</dd>
           {% endif %}
         </dl>
@@ -69,6 +74,21 @@
             {% csrf_token %}
             {{ zamitnutí_form|crispy }}
             <button type="submit" class="btn btn-danger">Potvrdit zamítnutí</button>
+          </form>
+        </div>
+        {% endif %}
+
+        {% if samoschvaleni_form %}
+        <hr>
+        <button type="button" class="btn btn-outline-success" data-bs-toggle="collapse" data-bs-target="#samoschvalitForm">
+          <i class="bi bi-person-check"></i> Schválit sám
+        </button>
+        <div class="collapse mt-3" id="samoschvalitForm">
+          <p class="text-muted small mb-2">Výjimečné schválení vlastní žádosti — uveďte důvod, uloží se k žádosti.</p>
+          <form method="post" action="{% url 'leaves:schvalit_sam' zadost.pk %}">
+            {% csrf_token %}
+            {{ samoschvaleni_form|crispy }}
+            <button type="submit" class="btn btn-success">Potvrdit schválení</button>
           </form>
         </div>
         {% endif %}
