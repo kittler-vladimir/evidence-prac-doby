@@ -9,6 +9,7 @@ from django.http import HttpResponseForbidden
 
 from .bilance import rozdel_na_tydny, secti
 from .models import WorkSession, WorkdaySummary, Pohyb, TypPohybu
+from .obdobi import zvolene_obdobi
 from .forms import PohybOpravitForm, WorkSessionOpravitForm, WorkSessionRucneForm, PohybRucneForm
 from .opravy import (
     ZNACKA_POHYB, ZNACKA_SESSION, bezpecny_next, je_ze_starsiho_dne, muze_opravovat,
@@ -278,10 +279,8 @@ def prehled_mesice(request):
         messages.info(request, "Tato stránka je dostupná jen pro zaměstnance s profilem.")
         return redirect("accounts:home")
     employee = request.user.employee
-    dnes = timezone.localdate()
-
-    rok = int(request.GET.get("rok", dnes.year))
-    mesic = int(request.GET.get("mesic", dnes.month))
+    obdobi = zvolene_obdobi(request)
+    rok, mesic = obdobi.rok, obdobi.mesic
 
     souhrny = list(WorkdaySummary.objects.filter(
         employee=employee,
@@ -292,6 +291,7 @@ def prehled_mesice(request):
     context = {
         "souhrny": souhrny,
         "tydny": rozdel_na_tydny(souhrny, rok, mesic),
+        "obdobi": obdobi,
         "rok": rok,
         "mesic": mesic,
         "celkem_odpr": sum(s.odpracovane_minuty for s in souhrny),

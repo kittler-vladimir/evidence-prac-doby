@@ -121,6 +121,9 @@ nastaven). Vypočítává `Employee.get_schvalovatel()`.
   typ pohybu nemá u pevné doby nastaveno „nezapočítává se“ (pak se odečte část
   uvnitř bloku).
   Den bez zaškrtnutého bloku dá 0 odpracovaných minut.
+- Měsíční přehledy (Výkaz, Odbor) a export do Excelu zobrazují aktuální měsíc;
+  šipkami nebo výběrem měsíce a roku lze přejít na dřívější měsíc (od prvních
+  záznamů po aktuální měsíc, budoucí měsíce se nenabízejí).
 - `WorkdaySummary` je odvozený denní souhrn — nikdy se nezapisuje přímo,
   přepočítá se signálem po každé změně `WorkSession`/`Pohyb`.
 
