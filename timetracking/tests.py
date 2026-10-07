@@ -1697,3 +1697,141 @@ class SouvisleBlokyPruznaDobaTests(TestCase):
         self._blok((11, 19), (16, 0))
         souhrn = WorkdaySummary.prepocitej(self.employee, self.den)
         self.assertEqual(souhrn.hrube_minuty, 197 + 281)
+
+
+DNES_TEST = date(2026, 10, 7)
+
+
+class ZvoleneObdobiTests(TestCase):
+    """Issue #87 — výběr měsíce a roku: výchozí, rozsah, neplatné hodnoty, odkazy."""
+
+    def setUp(self):
+        from django.test import RequestFactory
+        from unittest import mock
+
+        self.rf = RequestFactory()
+        zamestnanec = vytvor_zamestnance()
+        WorkdaySummary.objects.create(
+            employee=zamestnanec, datum=date(2025, 11, 12),
+            hrube_minuty=480, odpracovane_minuty=480, prescos_minuty=0,
+        )
+        patcher = mock.patch("timetracking.obdobi.timezone.localdate", return_value=DNES_TEST)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _obdobi(self, **get):
+        from timetracking.obdobi import zvolene_obdobi
+        return zvolene_obdobi(self.rf.get("/", get))
+
+    def test_vychozi_je_aktualni_mesic(self):
+        o = self._obdobi()
+        self.assertEqual((o.rok, o.mesic), (2026, 10))
+        self.assertTrue(o.je_aktualni)
+        self.assertEqual(o.nazev, "Říjen 2026")
+
+    def test_platny_minuly_mesic(self):
+        o = self._obdobi(rok="2026", mesic="3")
+        self.assertEqual((o.rok, o.mesic), (2026, 3))
+        self.assertFalse(o.je_aktualni)
+
+    def test_neplatne_hodnoty_davaji_aktualni_mesic(self):
+        for get in (
+            {"rok": "abc", "mesic": "9"}, {"rok": "2026", "mesic": "x"},
+            {"rok": "2026", "mesic": "0"}, {"rok": "2026", "mesic": "13"},
+            {"rok": "2026", "mesic": "11"},   # budoucnost
+            {"rok": "2099", "mesic": "1"},    # budoucnost
+            {"rok": "2025", "mesic": "10"},   # před prvními daty (11/2025)
+            {"rok": "2020", "mesic": "1"},
+        ):
+            with self.subTest(get=get):
+                o = self._obdobi(**get)
+                self.assertEqual((o.rok, o.mesic), (2026, 10))
+
+    def test_chybejici_cast_se_doplni_aktualni_hodnotou(self):
+        o = self._obdobi(mesic="3")
+        self.assertEqual((o.rok, o.mesic), (2026, 3))
+
+    def test_sipky_a_hranice_rozsahu(self):
+        prvni = self._obdobi(rok="2025", mesic="11")
+        self.assertIsNone(prvni.predchozi)
+        self.assertEqual(prvni.dalsi, (2025, 12))
+        aktualni = self._obdobi()
+        self.assertEqual(aktualni.predchozi, (2026, 9))
+        self.assertIsNone(aktualni.dalsi)
+        self.assertIsNone(aktualni.url_dalsi)
+
+    def test_sipky_prechazeji_pres_hranici_roku(self):
+        self.assertEqual(self._obdobi(rok="2026", mesic="1").predchozi, (2025, 12))
+        self.assertEqual(self._obdobi(rok="2025", mesic="12").dalsi, (2026, 1))
+        self.assertEqual(self._obdobi(rok="2026", mesic="1").url_predchozi, "?rok=2025&mesic=12")
+
+    def test_roky_a_mesice_v_nabidce(self):
+        o = self._obdobi()
+        self.assertEqual(o.roky, [2025, 2026])
+        self.assertEqual([m for m, _ in o.mesice], list(range(1, 11)))  # 2026: jen do října
+        self.assertEqual([m for m, _ in self._obdobi(rok="2025", mesic="12").mesice], [11, 12])
+
+    def test_bez_dat_je_povoleny_jen_aktualni_mesic(self):
+        WorkdaySummary.objects.all().delete()
+        o = self._obdobi(rok="2026", mesic="9")
+        self.assertEqual((o.rok, o.mesic), (2026, 10))
+        self.assertEqual(o.roky, [2026])
+        self.assertIsNone(o.predchozi)
+
+    def test_ostatni_parametry_se_zachovavaji_v_odkazech(self):
+        o = self._obdobi(rok="2026", mesic="5", sekce="2", odbor="3")
+        self.assertEqual(o.url_predchozi, "?sekce=2&odbor=3&rok=2026&mesic=4")
+        self.assertEqual(o.url_dnes, "?sekce=2&odbor=3")
+
+
+class VyberMesiceVykazTests(TestCase):
+    """Issue #87 — Výkaz ukáže zvolený měsíc a ovladač, neplatné parametry nespadnou."""
+
+    def setUp(self):
+        from unittest import mock
+
+        self.employee = vytvor_zamestnance()
+        self.client = Client()
+        self.client.force_login(self.employee.user)
+        WorkdaySummary.objects.create(
+            employee=self.employee, datum=date(2026, 9, 7),
+            hrube_minuty=525, odpracovane_minuty=525, prescos_minuty=45,
+        )
+        WorkdaySummary.objects.create(
+            employee=self.employee, datum=date(2026, 10, 5),
+            hrube_minuty=480, odpracovane_minuty=480, prescos_minuty=0,
+        )
+        patcher = mock.patch("timetracking.obdobi.timezone.localdate", return_value=DNES_TEST)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_vychozi_ukaze_aktualni_mesic_a_ovladac(self):
+        odpoved = self.client.get(reverse("timetracking:prehled_mesice"))
+        self.assertEqual(odpoved.status_code, 200)
+        self.assertContains(odpoved, "Výkaz – Říjen 2026")
+        self.assertContains(odpoved, 'name="mesic"')
+        self.assertContains(odpoved, "?rok=2026&amp;mesic=9")  # šipka na předchozí měsíc
+        self.assertNotContains(odpoved, "Dnešní měsíc")
+        self.assertEqual([s.datum for s in odpoved.context["souhrny"]], [date(2026, 10, 5)])
+
+    def test_zvoleny_minuly_mesic(self):
+        odpoved = self.client.get(reverse("timetracking:prehled_mesice"), {"rok": 2026, "mesic": 9})
+        self.assertContains(odpoved, "Výkaz – Září 2026")
+        self.assertContains(odpoved, "Dnešní měsíc")
+        self.assertEqual([s.datum for s in odpoved.context["souhrny"]], [date(2026, 9, 7)])
+        # odkaz na export nese zvolený měsíc
+        self.assertContains(odpoved, "rok=2026&mesic=9")
+
+    def test_neplatne_parametry_ukazuji_aktualni_mesic_bez_chyby(self):
+        for get in ({"rok": "abc", "mesic": "13"}, {"rok": 2099, "mesic": 1}, {"rok": 2020, "mesic": 1}):
+            with self.subTest(get=get):
+                odpoved = self.client.get(reverse("timetracking:prehled_mesice"), get)
+                self.assertEqual(odpoved.status_code, 200)
+                self.assertContains(odpoved, "Výkaz – Říjen 2026")
+
+    def test_stranka_nese_rozsah_pro_prepocet_mesicu_pri_zmene_roku(self):
+        odpoved = self.client.get(reverse("timetracking:prehled_mesice"))
+        self.assertContains(odpoved, 'id="rozsah-mesicu"')
+        self.assertEqual(
+            odpoved.context["obdobi"].rozsah_pro_skript["prvni"], [2026, 9],
+        )

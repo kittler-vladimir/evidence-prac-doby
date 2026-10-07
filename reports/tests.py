@@ -290,3 +290,64 @@ class PrehledTymuAExportBilanceTestCase(TestCase):
         self.assertEqual(radek_mesic[3].value, "0h 45min")   # Přesčas
         self.assertEqual(radek_mesic[4].value, "1h 30min")   # Nedostatek
         self.assertEqual(radek_mesic[6].value, "−0h 45min")  # Bilance
+
+
+class VyberMesiceOdborAExportTestCase(TestCase):
+    """Issue #87 — Odbor zachová filtr při změně měsíce, export snese neplatné parametry."""
+
+    def setUp(self):
+        from unittest import mock
+
+        self.sekce = Sekce.objects.create(nazev="Sekce", kod="S9")
+        odbor = Odbor.objects.create(sekce=self.sekce, nazev="Odbor", kod="O9")
+        oddeleni = Oddeleni.objects.create(odbor=odbor, nazev="Oddeleni", kod="OD9")
+        uvazek = TypUvazku.objects.create(
+            nazev="Plny uvazek", hodiny_denne=Decimal("8.00"), hodiny_tyydne=Decimal("40.00")
+        )
+        user = User.objects.create_user(
+            username="admin9@example.com", email="admin9@example.com",
+            first_name="Adam", last_name="Admin", is_staff=True,
+        )
+        self.zam = Employee.objects.create(
+            user=user, osobni_cislo="9", oddeleni=oddeleni,
+            typ_uvazku=uvazek, datum_nastupu=date(2020, 1, 1),
+        )
+        WorkdaySummary.objects.create(
+            employee=self.zam, datum=date(2026, 9, 7),
+            hrube_minuty=525, odpracovane_minuty=525, prescos_minuty=45,
+        )
+        self.client.force_login(user)
+        patcher = mock.patch(
+            "timetracking.obdobi.timezone.localdate", return_value=date(2026, 10, 7),
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_odbor_zachova_filtr_v_odkazech_na_jiny_mesic(self):
+        odpoved = self.client.get(
+            reverse("reports:prehled_tymu"), {"sekce": self.sekce.pk, "rok": 2026, "mesic": 10},
+        )
+        self.assertEqual(odpoved.status_code, 200)
+        self.assertContains(odpoved, f"?sekce={self.sekce.pk}&amp;rok=2026&amp;mesic=9")
+        # formulář výběru měsíce nese filtr jako skrytý parametr
+        self.assertContains(odpoved, f'<input type="hidden" name="sekce" value="{self.sekce.pk}">')
+        self.assertContains(odpoved, "Přehled odboru – Říjen 2026")
+
+    def test_odbor_ukaze_zvoleny_mesic_a_neplatny_nespadne(self):
+        odpoved = self.client.get(reverse("reports:prehled_tymu"), {"rok": 2026, "mesic": 9})
+        self.assertContains(odpoved, "Přehled odboru – Září 2026")
+        odpoved = self.client.get(reverse("reports:prehled_tymu"), {"rok": "x", "mesic": 99})
+        self.assertEqual(odpoved.status_code, 200)
+        self.assertContains(odpoved, "Přehled odboru – Říjen 2026")
+
+    def test_export_pouzije_zvoleny_mesic_a_toleruje_neplatne_parametry(self):
+        import openpyxl
+        from io import BytesIO
+
+        odpoved = self.client.get(reverse("reports:export_xlsx"), {"rok": 2026, "mesic": 9})
+        self.assertEqual(odpoved.status_code, 200)
+        self.assertEqual(openpyxl.load_workbook(BytesIO(odpoved.content)).active.title, "Výkaz 09-2026")
+
+        odpoved = self.client.get(reverse("reports:export_xlsx"), {"rok": "abc", "mesic": "13"})
+        self.assertEqual(odpoved.status_code, 200)
+        self.assertEqual(openpyxl.load_workbook(BytesIO(odpoved.content)).active.title, "Výkaz 10-2026")

@@ -1,0 +1,66 @@
+{# Výběr měsíce a roku přehledu (#87) — kontext: obdobi (timetracking.obdobi.Obdobi). #}
+<form method="get" class="d-flex align-items-center gap-2 flex-wrap mb-3">
+  {% for nazev, hodnota in obdobi.ostatni_parametry %}
+  <input type="hidden" name="{{ nazev }}" value="{{ hodnota }}">
+  {% endfor %}
+
+  {% if obdobi.url_predchozi %}
+  <a href="{{ obdobi.url_predchozi }}" class="btn btn-outline-secondary" title="Předchozí měsíc" aria-label="Předchozí měsíc">
+    <i class="bi bi-chevron-left"></i>
+  </a>
+  {% else %}
+  <button type="button" class="btn btn-outline-secondary" disabled aria-label="Předchozí měsíc">
+    <i class="bi bi-chevron-left"></i>
+  </button>
+  {% endif %}
+
+  <select name="mesic" class="form-select w-auto" aria-label="Měsíc">
+    {% for cislo, nazev in obdobi.mesice %}
+    <option value="{{ cislo }}" {% if cislo == obdobi.mesic %}selected{% endif %}>{{ nazev }}</option>
+    {% endfor %}
+  </select>
+  <select name="rok" class="form-select w-auto" aria-label="Rok">
+    {% for r in obdobi.roky %}
+    <option value="{{ r }}" {% if r == obdobi.rok %}selected{% endif %}>{{ r }}</option>
+    {% endfor %}
+  </select>
+  <button type="submit" class="btn btn-primary">Zobrazit</button>
+
+  {% if obdobi.url_dalsi %}
+  <a href="{{ obdobi.url_dalsi }}" class="btn btn-outline-secondary" title="Další měsíc" aria-label="Další měsíc">
+    <i class="bi bi-chevron-right"></i>
+  </a>
+  {% else %}
+  <button type="button" class="btn btn-outline-secondary" disabled aria-label="Další měsíc">
+    <i class="bi bi-chevron-right"></i>
+  </button>
+  {% endif %}
+
+  {% if not obdobi.je_aktualni %}
+  <a href="{{ obdobi.url_dnes }}" class="btn btn-link">Dnešní měsíc</a>
+  {% endif %}
+</form>
+{{ obdobi.rozsah_pro_skript|json_script:"rozsah-mesicu" }}
+<script>
+  (function () {
+    var rozsah = JSON.parse(document.getElementById("rozsah-mesicu").textContent);
+    var rok = document.querySelector('select[name="rok"]');
+    var mesic = document.querySelector('select[name="mesic"]');
+    // Při změně roku nabídne jen měsíce povolené v tom roce a zvolený měsíc posune
+    // do povoleného rozsahu.
+    rok.addEventListener("change", function () {
+      var r = parseInt(rok.value, 10);
+      var od = r === rozsah.prvni[0] ? rozsah.prvni[1] : 1;
+      var do_ = r === rozsah.aktualni[0] ? rozsah.aktualni[1] : 12;
+      var vybrany = Math.min(Math.max(parseInt(mesic.value, 10), od), do_);
+      mesic.innerHTML = "";
+      for (var m = od; m <= do_; m++) {
+        var o = document.createElement("option");
+        o.value = m;
+        o.textContent = rozsah.mesice[m];
+        if (m === vybrany) { o.selected = true; }
+        mesic.appendChild(o);
+      }
+    });
+  })();
+</script>

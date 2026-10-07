@@ -11,6 +11,7 @@ from django.http import HttpResponse
 from accounts.models import Employee, Odbor, Oddeleni, Sekce, viditelni_zamestnanci
 from timetracking.bilance import format_minut, rozdel_na_tydny, secti
 from timetracking.models import WorkdaySummary
+from timetracking.obdobi import zvolene_obdobi
 from timetracking.opravy import zaznamy_k_oprave
 from .services import NEPRITOMEN, PRITOMEN, stavy_zamestnancu
 
@@ -126,9 +127,8 @@ def prehled_tymu(request):
     """Měsíční výkaz odpracovaných hodin za viditelný okruh kolegů (stejný
     rozsah jako prehled_pritomnosti — accounts.viditelni_zamestnanci),
     seskupený podle organizační hierarchie."""
-    dnes = timezone.localdate()
-    rok = int(request.GET.get("rok", dnes.year))
-    mesic = int(request.GET.get("mesic", dnes.month))
+    obdobi = zvolene_obdobi(request)
+    rok, mesic = obdobi.rok, obdobi.mesic
 
     podrizeni = viditelni_zamestnanci(request.user)
     podrizeni, filtr = _filtr_podle_hierarchie(request, podrizeni)
@@ -164,7 +164,7 @@ def prehled_tymu(request):
         spravovani = Employee.objects.none()
 
     return render(request, "reports/prehled_tymu.html", {
-        "skupiny": skupiny, "filtr": filtr, "rok": rok, "mesic": mesic,
+        "skupiny": skupiny, "filtr": filtr, "obdobi": obdobi, "rok": rok, "mesic": mesic,
         "zaznamy_k_oprave": zaznamy_k_oprave(spravovani),
     })
 
@@ -180,9 +180,8 @@ def export_xlsx(request):
         messages.info(request, "Tato stránka je dostupná jen pro zaměstnance s profilem.")
         return redirect("accounts:home")
     employee = request.user.employee
-    dnes = timezone.localdate()
-    rok = int(request.GET.get("rok", dnes.year))
-    mesic = int(request.GET.get("mesic", dnes.month))
+    obdobi = zvolene_obdobi(request)
+    rok, mesic = obdobi.rok, obdobi.mesic
 
     souhrny = {
         s.datum: s
