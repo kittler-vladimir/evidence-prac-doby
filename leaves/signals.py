@@ -22,6 +22,24 @@ def _posli_email(subject: str, template: str, context: dict, recipients: list[st
 
 
 @receiver(post_save, sender=ZadostOStav)
+def prepocitej_souhrny_hodinove_zadosti(sender, instance, created, **kwargs):
+    """Schválená hodinová žádost se počítá do denní normy ve Výkazu (#82) — po vzniku
+    nebo přechodu stavu se přepočítají už existující denní souhrny jejích dnů. Dny bez
+    souhrnu (bez uzavřeného bloku docházky) se nezakládají."""
+    zadost = instance
+    if not zadost.je_po_hodinach:
+        return
+    if not (created or getattr(zadost, "_stav_se_zmenil", True)):
+        return
+
+    from timetracking.models import WorkdaySummary
+
+    for den in zadost.hodiny_po_dnech():
+        if WorkdaySummary.objects.filter(employee=zadost.employee, datum=den).exists():
+            WorkdaySummary.prepocitej(zadost.employee, den)
+
+
+@receiver(post_save, sender=ZadostOStav)
 def notifikace_zadost(sender, instance, created, **kwargs):
     """
     Odesílá e-mailové notifikace:

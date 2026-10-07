@@ -24,7 +24,7 @@
           <dd class="col-sm-8">{{ zadost.typ.nazev }}</dd>
 
           <dt class="col-sm-4">Od – do</dt>
-          <dd class="col-sm-8">{{ zadost.datum_od|date:"j. n. Y" }} – {{ zadost.datum_do|date:"j. n. Y" }}</dd>
+          <dd class="col-sm-8">{{ zadost.datum_od|date:"j. n. Y" }}{% if zadost.cas_od %} {{ zadost.cas_od|time:"G:i" }}{% endif %} – {{ zadost.datum_do|date:"j. n. Y" }}{% if zadost.cas_do %} {{ zadost.cas_do|time:"G:i" }}{% endif %}</dd>
 
           <dt class="col-sm-4">Počet hodin</dt>
           <dd class="col-sm-8">{{ zadost.pocet_hodin }}h</dd>

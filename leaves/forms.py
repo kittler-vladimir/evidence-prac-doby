@@ -5,21 +5,42 @@ from .models import ZadostOStav, TypStavu, ZustatekStavu
 class ZadostOStavForm(forms.ModelForm):
     class Meta:
         model = ZadostOStav
-        fields = ["typ", "datum_od", "datum_do", "poznamka_zamestnance"]
+        fields = ["typ", "datum_od", "cas_od", "datum_do", "cas_do", "poznamka_zamestnance"]
         widgets = {
             "datum_od": forms.DateInput(attrs={"type": "date"}, format="%Y-%m-%d"),
             "datum_do": forms.DateInput(attrs={"type": "date"}, format="%Y-%m-%d"),
+            "cas_od": forms.TimeInput(attrs={"type": "time"}, format="%H:%M"),
+            "cas_do": forms.TimeInput(attrs={"type": "time"}, format="%H:%M"),
+        }
+        help_texts = {
+            "cas_od": "Jen u žádosti po hodinách — jinak nechte prázdné (celé dny).",
         }
 
     def __init__(self, *args, employee=None, **kwargs):
         self.employee = employee
         super().__init__(*args, **kwargs)
-        self.fields["typ"].queryset = TypStavu.objects.filter(aktivni=True)
+        typy = TypStavu.objects.filter(aktivni=True)
+        self.fields["typ"].queryset = typy
+        # Typy, u kterých stránka nabídne čas od–do (viz nova_zadost.html).
+        self.typy_po_hodinach = list(
+            typy.filter(umoznuje_zadani_po_hodinach=True).values_list("pk", flat=True)
+        )
+        # Model.clean() hlídá hodinová pravidla (kolize, součet za den) a potřebuje
+        # zaměstnance — ten se do formuláře jinak nedostane (nastavuje ho až view).
+        if employee is not None:
+            self.instance.employee = employee
 
     def clean(self):
         cleaned = super().clean()
         datum_od = cleaned.get("datum_od")
         datum_do = cleaned.get("datum_do")
+        cas_od = cleaned.get("cas_od")
+        cas_do = cleaned.get("cas_do")
+
+        # Nekompletní čas hlásí ZadostOStav.clean() — tady by se zůstatek počítal
+        # z celých dnů a hláška by byla zavádějící.
+        if (cas_od is None) != (cas_do is None):
+            return cleaned
 
         if datum_od and datum_do:
             if datum_do < datum_od:
@@ -38,6 +59,8 @@ class ZadostOStavForm(forms.ModelForm):
                     employee=self.employee,
                     datum_od=datum_od,
                     datum_do=datum_do,
+                    cas_od=cas_od,
+                    cas_do=cas_do,
                 )
                 temp.vypocitej_hodiny()
 

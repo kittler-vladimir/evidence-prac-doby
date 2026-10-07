@@ -187,6 +187,18 @@ class TypUvazku(models.Model):
         prestavka = getattr(settings, "MANDATORY_BREAK_MINUTES", 30)
         return max(hrube - (prestavka if hrube > prah else 0), 0)
 
+    def okno_dne(self, datum):
+        """Začátek a konec pracovního dne pevné doby — `(nejdřívější blok_od,
+        nejpozdější blok_do)` bloků zaškrtnutých pro den v týdnu `datum`, nebo `None`
+        (pružná doba nebo den bez bloku: začátek/konec dne tam není dán)."""
+        if self.druh_pracovni_doby != self.DruhPracovniDoby.PEVNA:
+            return None
+        den_pole = CasovyBlokUvazku.DNY_V_TYDNU[datum.weekday()]
+        bloky_dne = list(self.casove_bloky.filter(**{den_pole: True}))
+        if not bloky_dne:
+            return None
+        return min(b.blok_od for b in bloky_dne), max(b.blok_do for b in bloky_dne)
+
 
 class CasovyBlokUvazku(models.Model):
     """

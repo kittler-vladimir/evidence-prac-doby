@@ -1,4 +1,4 @@
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 
 from django.contrib.auth import get_user_model
@@ -6,8 +6,9 @@ from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.test import TestCase
 from django.urls import reverse
+from django.utils import timezone
 
-from accounts.holidays_model import StatniSvatek
+from accounts.holidays_model import StatniSvatek, Zeme
 from accounts.models import CasovyBlokUvazku, Employee, Oddeleni, Odbor, Sekce, TypUvazku
 from leaves.forms import ZadostOStavForm
 from leaves.models import (
@@ -17,6 +18,8 @@ from leaves.models import (
     ZadostOStav,
     ZustatekStavu,
 )
+
+from timetracking.models import WorkdaySummary, WorkSession
 
 User = get_user_model()
 
@@ -393,3 +396,289 @@ class HodinyZadostiPodleTypuUvazkuTests(TestCase):
     def _zeme():
         from accounts.holidays_model import Zeme
         return Zeme.objects.get_or_create(kod="CZ", defaults={"nazev": "Česko"})[0]
+
+
+class HodinovaDovolenaTests(TestCase):
+    """Issue #82 — dovolená po hodinách (čas od–do)."""
+
+    PONDELI = date(2026, 10, 12)  # po 12. – pá 16. 10. 2026, bez státního svátku
+    CTVRTEK = date(2026, 10, 15)
+    PATEK = date(2026, 10, 16)
+    SOBOTA = date(2026, 10, 17)
+
+    def setUp(self):
+        sekce = Sekce.objects.create(nazev="Sekce", kod="S1")
+        odbor = Odbor.objects.create(sekce=sekce, nazev="Odbor", kod="O1")
+        oddeleni = Oddeleni.objects.create(odbor=odbor, nazev="Oddělení", kod="OD1")
+        self.pruzna = TypUvazku.objects.create(
+            nazev="Pružná", hodiny_denne=Decimal("8.00"), hodiny_tyydne=Decimal("40.00"),
+            druh_pracovni_doby=TypUvazku.DruhPracovniDoby.PRUZNA,
+        )
+        self.pevna = TypUvazku.objects.create(
+            nazev="Pevná", hodiny_denne=Decimal("8.00"), hodiny_tyydne=Decimal("40.00"),
+            druh_pracovni_doby=TypUvazku.DruhPracovniDoby.PEVNA,
+        )
+        CasovyBlokUvazku.objects.create(
+            typ_uvazku=self.pevna, blok_od="07:30", blok_do="16:15",
+            pondeli=True, utery=True, streda=True, ctvrtek=True,
+        )
+        CasovyBlokUvazku.objects.create(
+            typ_uvazku=self.pevna, blok_od="07:30", blok_do="15:00", patek=True,
+        )
+        self.emp_pruzna = self._zamestnanec("pruzna@example.com", "1", self.pruzna, oddeleni)
+        self.emp_pevna = self._zamestnanec("pevna@example.com", "2", self.pevna, oddeleni)
+        self.dovolena = TypStavu.objects.create(
+            nazev="Dovolená", zkratka="DOV", je_dovolena=True,
+            kategorie_pro_prehled=TypStavu.KategoriePrehled.DOVOLENA,
+            umoznuje_zadani_po_hodinach=True,
+        )
+        self.nemoc = TypStavu.objects.create(
+            nazev="Nemoc", zkratka="NEM", odecita_ze_zustatku=False, vyzaduje_schvaleni=False,
+        )
+        NarokDovolene.objects.create(hodin=Decimal("160.00"), platne_od=date(2026, 1, 1))
+
+    @staticmethod
+    def _zamestnanec(email, cislo, typ_uvazku, oddeleni):
+        user = User.objects.create_user(
+            username=email, email=email, first_name="Jan", last_name=cislo,
+        )
+        return Employee.objects.create(
+            user=user, osobni_cislo=cislo, oddeleni=oddeleni,
+            typ_uvazku=typ_uvazku, datum_nastupu=date(2020, 1, 1),
+        )
+
+    def _zadost(self, employee, od, do, cas_od=None, cas_do=None, typ=None):
+        return ZadostOStav(
+            employee=employee, typ=typ or self.dovolena, datum_od=od, datum_do=do,
+            cas_od=cas_od, cas_do=cas_do,
+        )
+
+    def _hodiny(self, employee, od, do, cas_od, cas_do):
+        zadost = self._zadost(employee, od, do, cas_od, cas_do)
+        zadost.vypocitej_hodiny()
+        return zadost.pocet_hodin
+
+    def _uloz(self, employee, od, do, cas_od=None, cas_do=None):
+        zadost = self._zadost(employee, od, do, cas_od, cas_do)
+        zadost.full_clean()
+        zadost.save()
+        return zadost
+
+    # --- výpočet hodin ---
+
+    def test_pruzna_jeden_den_je_rozdil_od_do(self):
+        self.assertEqual(
+            self._hodiny(self.emp_pruzna, self.PONDELI, self.PONDELI, time(9, 0), time(11, 30)),
+            Decimal("2.50"),
+        )
+
+    def test_hodiny_dne_se_omezi_denni_normou(self):
+        self.assertEqual(
+            self._hodiny(self.emp_pruzna, self.PONDELI, self.PONDELI, time(6, 0), time(18, 0)),
+            Decimal("8.00"),
+        )
+
+    def test_pevna_jeden_den_je_rozdil_od_do(self):
+        self.assertEqual(
+            self._hodiny(self.emp_pevna, self.PATEK, self.PATEK, time(13, 0), time(15, 0)),
+            Decimal("2.00"),
+        )
+
+    def test_pevna_vice_dnu_je_souvisly_interval(self):
+        """Čtvrtek 14:00 – pátek 9:00 = 2:15 do konce bloku + 1:30 od začátku bloku."""
+        self.assertEqual(
+            self._hodiny(self.emp_pevna, self.CTVRTEK, self.PATEK, time(14, 0), time(9, 0)),
+            Decimal("3.75"),
+        )
+
+    def test_pevna_pres_vikend_prvni_posledni_den_castecne_mezi_nimi_cela_norma(self):
+        """Čtvrtek 14:00 – pondělí 9:00: 2:15 (čt) + 7 h (pá, celá norma) + 1:30 (po)."""
+        self.assertEqual(
+            self._hodiny(self.emp_pevna, self.CTVRTEK, self.PONDELI + timedelta(days=7),
+                         time(14, 0), time(9, 0)),
+            Decimal("10.75"),
+        )
+
+    def test_svatek_uprostred_intervalu_se_preskoci(self):
+        zeme = Zeme.objects.create(kod="CZ", nazev="Česko")
+        StatniSvatek.objects.create(datum=self.PATEK, nazev="Svátek", zeme=zeme)
+        self.assertEqual(
+            self._hodiny(self.emp_pevna, self.CTVRTEK, self.PONDELI + timedelta(days=7),
+                         time(14, 0), time(9, 0)),
+            Decimal("3.75"),
+        )
+
+    def test_dny_bez_casu_se_pocitaji_jako_drive(self):
+        self.assertEqual(
+            self._hodiny(self.emp_pevna, self.PONDELI, self.PONDELI + timedelta(days=4), None, None),
+            Decimal("40.00"),
+        )
+
+    # --- validace ---
+
+    def test_pruzna_vice_dnu_po_hodinach_je_zamitnuta(self):
+        zadost = self._zadost(
+            self.emp_pruzna, self.PONDELI, self.PONDELI + timedelta(days=1), time(9, 0), time(11, 0),
+        )
+        with self.assertRaisesMessage(ValidationError, "jen v rámci jednoho dne"):
+            zadost.full_clean()
+
+    def test_jen_jeden_z_casu_je_zamitnut(self):
+        zadost = self._zadost(self.emp_pruzna, self.PONDELI, self.PONDELI, time(9, 0), None)
+        with self.assertRaisesMessage(ValidationError, "čas od i čas do"):
+            zadost.full_clean()
+
+    def test_cas_do_musi_byt_po_case_od(self):
+        zadost = self._zadost(self.emp_pruzna, self.PONDELI, self.PONDELI, time(11, 0), time(9, 0))
+        with self.assertRaisesMessage(ValidationError, "po čase od"):
+            zadost.full_clean()
+
+    def test_typ_bez_priznaku_po_hodinach_nelze(self):
+        zadost = self._zadost(
+            self.emp_pruzna, self.PONDELI, self.PONDELI, time(9, 0), time(11, 0), typ=self.nemoc,
+        )
+        with self.assertRaisesMessage(ValidationError, "nelze zadat po hodinách"):
+            zadost.full_clean()
+
+    def test_hodinova_zadost_jen_na_vikend_je_zamitnuta(self):
+        zadost = self._zadost(
+            self.emp_pruzna, self.SOBOTA, self.SOBOTA, time(9, 0), time(11, 0),
+        )
+        with self.assertRaisesMessage(ValidationError, "žádný pracovní den"):
+            zadost.full_clean()
+
+    def test_prekryv_s_jinou_hodinovou_zadosti_je_zamitnut(self):
+        self._uloz(self.emp_pruzna, self.PONDELI, self.PONDELI, time(9, 0), time(11, 0))
+        zadost = self._zadost(self.emp_pruzna, self.PONDELI, self.PONDELI, time(10, 0), time(12, 0))
+        with self.assertRaisesMessage(ValidationError, "časově překrývá"):
+            zadost.full_clean()
+
+    def test_navazujici_hodinove_zadosti_se_neprekryvaji(self):
+        self._uloz(self.emp_pruzna, self.PONDELI, self.PONDELI, time(9, 0), time(11, 0))
+        self._uloz(self.emp_pruzna, self.PONDELI, self.PONDELI, time(11, 0), time(12, 0))
+
+    def test_hodinova_zadost_v_dni_s_celodenni_zadosti_je_zamitnuta(self):
+        self._uloz(self.emp_pruzna, self.PONDELI, self.PONDELI)
+        zadost = self._zadost(self.emp_pruzna, self.PONDELI, self.PONDELI, time(9, 0), time(11, 0))
+        with self.assertRaisesMessage(ValidationError, "časově překrývá"):
+            zadost.full_clean()
+
+    def test_celodenni_zadost_v_dni_s_hodinovou_je_zamitnuta(self):
+        self._uloz(self.emp_pruzna, self.PONDELI, self.PONDELI, time(9, 0), time(11, 0))
+        zadost = self._zadost(self.emp_pruzna, self.PONDELI, self.PONDELI)
+        with self.assertRaisesMessage(ValidationError, "časově překrývá"):
+            zadost.full_clean()
+
+    def test_dve_celodenni_zadosti_se_dal_nehlidaji(self):
+        self._uloz(self.emp_pruzna, self.PONDELI, self.PONDELI)
+        self._uloz(self.emp_pruzna, self.PONDELI, self.PONDELI)
+
+    def test_stornovana_zadost_neblokuje(self):
+        puvodni = self._uloz(self.emp_pruzna, self.PONDELI, self.PONDELI, time(9, 0), time(11, 0))
+        puvodni.stav = ZadostOStav.Stav.STORNOVÁNO
+        puvodni.save()
+        self._uloz(self.emp_pruzna, self.PONDELI, self.PONDELI, time(9, 0), time(11, 0))
+
+    def test_soucet_za_den_nesmi_prekrocit_normu(self):
+        """4:30 + 4:15 = 8:45 > 8:15 (norma pevné doby v pondělí), i když se časy nepřekrývají."""
+        self._uloz(self.emp_pevna, self.PONDELI, self.PONDELI, time(7, 30), time(12, 0))
+        zadost = self._zadost(self.emp_pevna, self.PONDELI, self.PONDELI, time(12, 0), time(16, 15))
+        with self.assertRaisesMessage(ValidationError, "překročil denní normu"):
+            zadost.full_clean()
+
+    # --- zůstatek a Výkaz ---
+
+    def test_schvaleni_odecte_hodiny_ze_zustatku(self):
+        zadost = self._uloz(self.emp_pruzna, self.PONDELI, self.PONDELI, time(9, 0), time(11, 30))
+        self.assertEqual(zadost.pocet_hodin, Decimal("2.50"))
+        zadost.schval(self.emp_pevna)
+        zustatek = ZustatekStavu.objects.get(employee=self.emp_pruzna, rok=2026, typ=self.dovolena)
+        self.assertEqual(zustatek.cerpano_hodin, Decimal("2.50"))
+
+    def test_vicedenni_hodinova_zadost_pevne_doby_odecte_cely_interval(self):
+        zadost = self._uloz(self.emp_pevna, self.CTVRTEK, self.PATEK, time(14, 0), time(9, 0))
+        zadost.schval(self.emp_pruzna)
+        zustatek = ZustatekStavu.objects.get(employee=self.emp_pevna, rok=2026, typ=self.dovolena)
+        self.assertEqual(zustatek.cerpano_hodin, Decimal("3.75"))
+
+    def test_schvalena_hodinova_dovolena_se_pocita_do_denni_normy(self):
+        den = self.PONDELI
+        zacatek = timezone.make_aware(datetime.combine(den, time(8, 0)))
+        WorkSession.objects.create(
+            employee=self.emp_pruzna, zacatek=zacatek, konec=zacatek + timedelta(hours=6, minutes=30),
+        )
+        souhrn = WorkdaySummary.objects.get(employee=self.emp_pruzna, datum=den)
+        self.assertEqual(souhrn.odpracovane_minuty, 360)  # 6 h 30 min − 30 min přestávka
+        self.assertEqual(souhrn.prescos_minuty, -120)
+
+        zadost = self._uloz(self.emp_pruzna, den, den, time(14, 30), time(16, 30))
+        souhrn.refresh_from_db()
+        self.assertEqual(souhrn.prescos_minuty, -120)  # čekající žádost se nepočítá
+
+        zadost.schval(self.emp_pevna)
+        souhrn.refresh_from_db()
+        self.assertEqual(souhrn.prescos_minuty, 0)  # 6 h + 2 h dovolené − 8 h normy
+
+    def test_den_bez_hodinove_dovolene_se_nemeni(self):
+        den = self.PONDELI
+        zacatek = timezone.make_aware(datetime.combine(den, time(8, 0)))
+        WorkSession.objects.create(
+            employee=self.emp_pruzna, zacatek=zacatek, konec=zacatek + timedelta(hours=8, minutes=30),
+        )
+        souhrn = WorkdaySummary.objects.get(employee=self.emp_pruzna, datum=den)
+        self.assertEqual(souhrn.prescos_minuty, 0)
+
+    # --- formulář ---
+
+    def _formular(self, employee, data):
+        zaklad = {"typ": self.dovolena.pk, "datum_od": self.PONDELI, "datum_do": self.PONDELI}
+        zaklad.update(data)
+        return ZadostOStavForm(zaklad, employee=employee)
+
+    def test_formular_prijme_hodinovou_zadost(self):
+        form = self._formular(self.emp_pruzna, {"cas_od": "09:00", "cas_do": "11:30"})
+        self.assertTrue(form.is_valid(), form.errors)
+
+    def test_formular_odmitne_nedostatecny_zustatek_pro_hodiny(self):
+        ZustatekStavu.objects.create(
+            employee=self.emp_pruzna, rok=2026, typ=self.dovolena,
+            narok_hodin=Decimal("2.00"),
+        )
+        form = self._formular(self.emp_pruzna, {"cas_od": "09:00", "cas_do": "11:30"})
+        self.assertFalse(form.is_valid())
+        self.assertIn("Nedostatečný zůstatek", str(form.errors))
+
+    def test_formular_odmitne_typ_bez_priznaku_s_casem(self):
+        form = self._formular(
+            self.emp_pruzna, {"typ": self.nemoc.pk, "cas_od": "09:00", "cas_do": "11:00"},
+        )
+        self.assertFalse(form.is_valid())
+        self.assertIn("nelze zadat po hodinách", str(form.errors))
+
+    def test_formular_nabizi_cas_jen_u_typu_s_priznakem(self):
+        form = self._formular(self.emp_pruzna, {})
+        self.assertEqual(form.typy_po_hodinach, [self.dovolena.pk])
+
+    def test_typ_stavu_ma_priznak_po_hodinach_ve_vychozim_stavu_vypnuty(self):
+        self.assertFalse(TypStavu.objects.create(nazev="Jiné", zkratka="J").umoznuje_zadani_po_hodinach)
+
+    # --- stránka nové žádosti ---
+
+    def test_stranka_nove_zadosti_nabizi_pole_cas_od_do(self):
+        self.client.force_login(self.emp_pruzna.user)
+        odpoved = self.client.get(reverse("leaves:nova_zadost"))
+        self.assertEqual(odpoved.status_code, 200)
+        self.assertContains(odpoved, 'id="id_cas_od"')
+        self.assertContains(odpoved, 'id="typy-po-hodinach"')
+
+    def test_odeslani_hodinove_zadosti_ulozi_cas_a_hodiny(self):
+        self.client.force_login(self.emp_pruzna.user)
+        odpoved = self.client.post(reverse("leaves:nova_zadost"), {
+            "typ": self.dovolena.pk, "datum_od": "2026-10-12", "datum_do": "2026-10-12",
+            "cas_od": "09:00", "cas_do": "11:30",
+        })
+        self.assertEqual(odpoved.status_code, 302)
+        zadost = ZadostOStav.objects.get(employee=self.emp_pruzna)
+        self.assertEqual((zadost.cas_od, zadost.cas_do), (time(9, 0), time(11, 30)))
+        self.assertEqual(zadost.pocet_hodin, Decimal("2.50"))
+        self.assertContains(self.client.get(reverse("leaves:moje_zadosti")), "9:00")

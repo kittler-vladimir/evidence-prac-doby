@@ -22,8 +22,8 @@
         <tr>
           <td>{{ z.employee.jmeno }}</td>
           <td>{{ z.typ.zkratka }}</td>
-          <td>{{ z.datum_od|date:"j. n. Y" }}</td>
-          <td>{{ z.datum_do|date:"j. n. Y" }}</td>
+          <td>{{ z.datum_od|date:"j. n. Y" }}{% if z.cas_od %} {{ z.cas_od|time:"G:i" }}{% endif %}</td>
+          <td>{{ z.datum_do|date:"j. n. Y" }}{% if z.cas_do %} {{ z.cas_do|time:"G:i" }}{% endif %}</td>
           <td>{{ z.pocet_hodin }}h</td>
           <td class="text-end">
             <a href="{% url 'leaves:detail_zadosti' z.pk %}" class="btn btn-sm btn-primary">Posoudit</a>
