@@ -14,6 +14,24 @@
           <button type="submit" class="btn btn-primary">Odeslat</button>
           <a href="{% url 'leaves:moje_zadosti' %}" class="btn btn-outline-secondary">Zpět</a>
         </form>
+        {{ form.typy_po_hodinach|json_script:"typy-po-hodinach" }}
+        <script>
+          (function () {
+            var typy = JSON.parse(document.getElementById("typy-po-hodinach").textContent).map(String);
+            var typ = document.getElementById("id_typ");
+            var pole = ["id_cas_od", "id_cas_do"].map(function (id) { return document.getElementById(id); });
+            function zobraz() {
+              var povoleno = typy.indexOf(typ.value) !== -1;
+              pole.forEach(function (input) {
+                var blok = input.closest(".mb-3") || input.parentElement;
+                blok.style.display = povoleno ? "" : "none";
+                if (!povoleno) { input.value = ""; }
+              });
+            }
+            typ.addEventListener("change", zobraz);
+            zobraz();
+          })();
+        </script>
       </div>
     </div>
   </div>

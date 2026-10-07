@@ -3,8 +3,8 @@ Dobrý den,
 zaměstnanec {{ zadost.employee.jmeno }} podal/a žádost o dovolenou.
 
 Typ: {{ zadost.typ.nazev }}
-Od: {{ zadost.datum_od|date:"j. F Y" }}
-Do: {{ zadost.datum_do|date:"j. F Y" }}
+Od: {{ zadost.datum_od|date:"j. F Y" }}{% if zadost.cas_od %} {{ zadost.cas_od|time:"G:i" }}{% endif %}
+Do: {{ zadost.datum_do|date:"j. F Y" }}{% if zadost.cas_do %} {{ zadost.cas_do|time:"G:i" }}{% endif %}
 Počet hodin: {{ zadost.pocet_hodin }}h
 
 {% if zadost.poznamka_zamestnance %}Poznámka: {{ zadost.poznamka_zamestnance }}{% endif %}

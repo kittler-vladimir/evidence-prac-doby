@@ -132,6 +132,11 @@ nastaven). Vypočítává `Employee.get_schvalovatel()`.
   žádost `ZadostOStav` a schvalovací workflow (e-mail žadateli i schvalovateli).
 - Typy s `vyzaduje_schvaleni=False` (nemoc, OČR, služební volno, home office)
   si zaměstnanec zapisuje sám, rovnou schválené, bez e-mailu.
+- Dovolenou lze zadat i **po hodinách** (čas od–do), pokud to typ stavu povoluje
+  (`umoznuje_zadani_po_hodinach` v administraci; ve výchozím stavu jen dovolená).
+  U pružné doby jen v rámci jednoho dne, u pevné i přes více dnů jako souvislý
+  interval podle pracovních bloků. Hodiny se odečtou ze zůstatku a schválená
+  hodinová dovolená se započítá do denní normy ve Výkazu.
 - Roční nároky (`NarokDovolene`, `NarokIndispozicnihoVolna`) a zůstatky
   (`ZustatekStavu`) se do nového roku převádí příkazem `obnov_rocni_naroky`.
 

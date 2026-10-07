@@ -486,7 +486,12 @@ class WorkdaySummary(models.Model):
         odpracovane = max(hrube_minuty - prestavka - pohyby_minuty, 0)
 
         # Přesčas / nedostatek proti denní normě úvazku (pevná doba: z bloků dne).
-        prescos = odpracovane - employee.typ_uvazku.norma_minut(datum)
+        # Schválená hodinová dovolená dne se do normy započítá — 6 h práce + 2 h
+        # dovolené na osmihodinovém dni je vyrovnaná bilance (#82).
+        from leaves.models import ZadostOStav
+
+        volno = ZadostOStav.hodinove_volno_minuty(employee, datum)
+        prescos = odpracovane + volno - employee.typ_uvazku.norma_minut(datum)
 
         je_svatek = StatniSvatek.objects.filter(datum=datum).exists()
         je_vikend = datum.weekday() >= 5  # Sat=5, Sun=6

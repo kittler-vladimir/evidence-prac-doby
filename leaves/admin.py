@@ -15,6 +15,7 @@ class TypStavuAdmin(admin.ModelAdmin):
     list_display = [
         "zkratka", "nazev", "je_pritomnost", "vyzaduje_schvaleni",
         "odecita_ze_zustatku", "je_indispozicni_volno", "je_dovolena",
+        "umoznuje_zadani_po_hodinach",
         "kategorie_pro_prehled", "aktivni",
     ]
     list_editable = ["aktivni"]
@@ -44,7 +45,7 @@ class ZustatekStavuAdmin(admin.ModelAdmin):
 @admin.register(ZadostOStav)
 class ZadostOStavAdmin(admin.ModelAdmin):
     list_display = [
-        "employee", "typ", "datum_od", "datum_do",
+        "employee", "typ", "datum_od", "cas_od", "datum_do", "cas_do",
         "pocet_hodin", "stav", "schvalovatele", "schvaleno_kym"
     ]
     list_filter = ["stav", "typ"]

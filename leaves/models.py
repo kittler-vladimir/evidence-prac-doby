@@ -65,6 +65,14 @@ class TypStavu(models.Model):
             "nepřítomnosti na pracovišti."
         ),
     )
+    umoznuje_zadani_po_hodinach = models.BooleanField(
+        _("umožňuje zadání po hodinách"),
+        default=False,
+        help_text=_(
+            "Zapnuto: u žádosti tohoto typu lze místo celých dnů zadat čas "
+            "od–do. Ve výchozím stavu je zapnuto jen u dovolené."
+        ),
+    )
     kategorie_pro_prehled = models.CharField(
         _("kategorie pro přehled přítomnosti"),
         max_length=20,
@@ -263,6 +271,10 @@ class ZadostOStav(models.Model):
     )
     datum_od = models.DateField(_("datum od"))
     datum_do = models.DateField(_("datum do"))
+    # Volitelný čas od–do (jen u typů s umoznuje_zadani_po_hodinach): vyplněné oba
+    # = hodinová žádost, prázdné oba = celé dny jako dřív.
+    cas_od = models.TimeField(_("čas od"), null=True, blank=True)
+    cas_do = models.TimeField(_("čas do"), null=True, blank=True)
 
     # Počet hodin se vypočítá při uložení (pracovní dny × hod/den dle úvazku, bez svátků)
     pocet_hodin = models.DecimalField(
@@ -308,37 +320,192 @@ class ZadostOStav(models.Model):
             f"{self.datum_od} – {self.datum_do} | {self.get_stav_display()}"
         )
 
-    def clean(self):
-        if self.datum_od and self.datum_do and self.datum_do < self.datum_od:
-            raise ValidationError(_("Datum do musí být po datu od."))
+    @property
+    def je_po_hodinach(self):
+        """Hodinová žádost (čas od–do vyplněný), ne celé dny."""
+        return self.cas_od is not None and self.cas_do is not None
 
-    def vypocitej_hodiny(self):
-        """
-        Spočítá počet hodin dovolené:
-        pracovní dny v rozsahu (bez víkendů a státních svátků) × denní norma úvazku
-        (TypUvazku.norma_minut: pružná doba hodiny_denne, pevná čistá doba bloků dne).
-        """
+    @staticmethod
+    def _minuty_dne(cas):
+        return cas.hour * 60 + cas.minute
+
+    def popis_rozsahu(self):
+        """Rozsah žádosti pro hlášky, např. „12. 10. 2026 9:00–11:30“."""
+        def den(d):
+            return f"{d.day}. {d.month}. {d.year}"
+
+        def cas(t):
+            return f"{t.hour}:{t.minute:02d}"
+
+        if not self.je_po_hodinach:
+            if self.datum_od == self.datum_do:
+                return den(self.datum_od)
+            return f"{den(self.datum_od)} – {den(self.datum_do)}"
+        if self.datum_od == self.datum_do:
+            return f"{den(self.datum_od)} {cas(self.cas_od)}–{cas(self.cas_do)}"
+        return f"{den(self.datum_od)} {cas(self.cas_od)} – {den(self.datum_do)} {cas(self.cas_do)}"
+
+    def hodiny_po_dnech(self):
+        """Minuty dovolené po jednotlivých dnech rozsahu: `{datum: minuty}` jen pro dny
+        Po–Pá bez státního svátku, ve kterých je něco k započítání. Jediné místo, ze
+        kterého čerpá `vypocitej_hodiny()` i kontroly součtu za den.
+
+        Celé dny: denní norma (`TypUvazku.norma_minut`). Hodinová žádost na jeden den:
+        rozdíl `cas_do − cas_od`. Hodinová žádost přes více dnů (pevná doba) je souvislý
+        interval: první den od `cas_od` do konce pracovního dne (`TypUvazku.okno_dne`),
+        poslední den od začátku pracovního dne do `cas_do`, dny mezi nimi celá norma.
+        Každý den nejvýš do své normy."""
         from accounts.holidays_model import StatniSvatek
         from datetime import timedelta
 
         if not (self.datum_od and self.datum_do and self.employee_id):
-            return
+            return {}
 
         svatky = set(
             StatniSvatek.objects.filter(
-                datum__gte=self.datum_od,
-                datum__lte=self.datum_do,
+                datum__gte=self.datum_od, datum__lte=self.datum_do,
             ).values_list("datum", flat=True)
         )
-
         typ_uvazku = self.employee.typ_uvazku
-        minuty = 0
-        current = self.datum_od
-        while current <= self.datum_do:
-            if current.weekday() < 5 and current not in svatky:
-                minuty += typ_uvazku.norma_minut(current)
-            current += timedelta(days=1)
+        po_hodinach = self.je_po_hodinach
+        jeden_den = self.datum_od == self.datum_do
 
+        dny = {}
+        den = self.datum_od
+        while den <= self.datum_do:
+            if den.weekday() < 5 and den not in svatky:
+                norma = typ_uvazku.norma_minut(den)
+                minuty = norma
+                if po_hodinach:
+                    od = self._minuty_dne(self.cas_od)
+                    do = self._minuty_dne(self.cas_do)
+                    okno = typ_uvazku.okno_dne(den)
+                    if jeden_den or okno is None:
+                        minuty = do - od
+                    elif den == self.datum_od:
+                        minuty = self._minuty_dne(okno[1]) - od
+                    elif den == self.datum_do:
+                        minuty = do - self._minuty_dne(okno[0])
+                minuty = min(minuty, norma)
+                if minuty > 0:
+                    dny[den] = minuty
+            den += timedelta(days=1)
+        return dny
+
+    def intervaly_po_dnech(self):
+        """Časové okno žádosti v každém započítaném dni jako `{datum: (od_min, do_min)}`
+        v minutách od půlnoci — celé dny zabírají celý den (0–1440)."""
+        intervaly = {}
+        for den in self.hodiny_po_dnech():
+            if not self.je_po_hodinach:
+                intervaly[den] = (0, 1440)
+            elif self.datum_od == self.datum_do:
+                intervaly[den] = (self._minuty_dne(self.cas_od), self._minuty_dne(self.cas_do))
+            elif den == self.datum_od:
+                intervaly[den] = (self._minuty_dne(self.cas_od), 1440)
+            elif den == self.datum_do:
+                intervaly[den] = (0, self._minuty_dne(self.cas_do))
+            else:
+                intervaly[den] = (0, 1440)
+        return intervaly
+
+    def clean(self):
+        if self.datum_od and self.datum_do and self.datum_do < self.datum_od:
+            raise ValidationError(_("Datum do musí být po datu od."))
+        self._zkontroluj_hodinovou_zadost()
+
+    def _zkontroluj_hodinovou_zadost(self):
+        """Pravidla hodinové dovolené (#82): čas od i do zároveň, jen u typů s příznakem,
+        pružná doba jen v rámci jednoho dne, aspoň jeden započítaný den, žádné časové
+        překryvy s jinou žádostí a součet za den do denní normy."""
+        from accounts.models import TypUvazku
+
+        if (self.cas_od is None) != (self.cas_do is None):
+            raise ValidationError(_("Vyplňte čas od i čas do, nebo ani jeden z nich."))
+
+        po_hodinach = self.je_po_hodinach
+        if po_hodinach:
+            if self.typ_id and not self.typ.umoznuje_zadani_po_hodinach:
+                raise ValidationError(
+                    _("Typ „%(typ)s“ nelze zadat po hodinách.") % {"typ": self.typ.nazev}
+                )
+            if (
+                self.datum_od and self.datum_do and self.datum_od == self.datum_do
+                and self.cas_do <= self.cas_od
+            ):
+                raise ValidationError(_("Čas do musí být po čase od."))
+
+        if not (self.employee_id and self.datum_od and self.datum_do):
+            return
+
+        if po_hodinach and self.datum_od != self.datum_do and (
+            self.employee.typ_uvazku.druh_pracovni_doby != TypUvazku.DruhPracovniDoby.PEVNA
+        ):
+            raise ValidationError(
+                _("U pružné pracovní doby lze hodinovou žádost zadat jen v rámci jednoho dne.")
+            )
+
+        dny = self.hodiny_po_dnech()
+        if po_hodinach and not dny:
+            raise ValidationError(_("V zadaném rozsahu není žádný pracovní den."))
+
+        ostatni = list(
+            ZadostOStav.objects.filter(
+                employee_id=self.employee_id,
+                stav__in=[self.Stav.CEKA, self.Stav.SCHVALENO],
+                datum_od__lte=self.datum_do,
+                datum_do__gte=self.datum_od,
+            ).exclude(pk=self.pk).select_related("typ", "employee__typ_uvazku")
+        )
+        # Kolize hlídáme jen tam, kde je aspoň jedna ze žádostí hodinová — překryv
+        # dvou žádostí na celé dny se dosud nehlídá.
+        moje_intervaly = self.intervaly_po_dnech()
+        for jina in ostatni:
+            if not (po_hodinach or jina.je_po_hodinach):
+                continue
+            for den, (od2, do2) in jina.intervaly_po_dnech().items():
+                od1, do1 = moje_intervaly.get(den, (0, 0))
+                if od1 < do2 and od2 < do1:
+                    raise ValidationError(
+                        _("Žádost se časově překrývá s jinou žádostí: %(typ)s, %(rozsah)s.")
+                        % {"typ": jina.typ.nazev, "rozsah": jina.popis_rozsahu()}
+                    )
+
+        if po_hodinach:
+            typ_uvazku = self.employee.typ_uvazku
+            for den, minuty in dny.items():
+                celkem = minuty + sum(j.hodiny_po_dnech().get(den, 0) for j in ostatni)
+                if celkem > typ_uvazku.norma_minut(den):
+                    raise ValidationError(
+                        _("Součet dovolené za %(den)s by překročil denní normu.")
+                        % {"den": f"{den.day}. {den.month}. {den.year}"}
+                    )
+
+    @classmethod
+    def hodinove_volno_minuty(cls, employee, datum):
+        """Minuty schválené hodinové žádosti zaměstnance v daný den (0, když žádná není) —
+        `WorkdaySummary.prepocitej()` je přičte k odpracované době (#82)."""
+        zadosti = cls.objects.filter(
+            employee=employee,
+            stav=cls.Stav.SCHVALENO,
+            cas_od__isnull=False,
+            cas_do__isnull=False,
+            datum_od__lte=datum,
+            datum_do__gte=datum,
+        ).select_related("employee__typ_uvazku")
+        return sum(z.hodiny_po_dnech().get(datum, 0) for z in zadosti)
+
+    def vypocitej_hodiny(self):
+        """
+        Spočítá počet hodin žádosti jako součet minut z `hodiny_po_dnech()`:
+        pracovní dny v rozsahu (bez víkendů a státních svátků) × denní norma úvazku
+        (TypUvazku.norma_minut: pružná doba hodiny_denne, pevná čistá doba bloků dne),
+        u hodinové žádosti jen zadaný čas od–do.
+        """
+        if not (self.datum_od and self.datum_do and self.employee_id):
+            return
+
+        minuty = sum(self.hodiny_po_dnech().values())
         self.pocet_hodin = (Decimal(minuty) / 60).quantize(Decimal("0.01"))
 
     def schval(self, schvalovatele):
