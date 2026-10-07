@@ -46,7 +46,7 @@
   </div>
   {% endif %}
 
-  {% if user.employee.oddeleni.vedouci == user.employee or user.is_staff %}
+  {% if user.employee.schvaluje_zadosti or user.is_staff %}
   <div class="col-md-4">
     <a href="{% url 'leaves:ke_schvaleni' %}" class="text-decoration-none">
       <div class="card shadow-sm h-100">

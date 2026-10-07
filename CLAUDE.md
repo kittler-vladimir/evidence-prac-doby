@@ -60,6 +60,8 @@ Sekce → Odbor → Oddeleni → Employee
 
 Each level has an optional `vedouci` (manager) FK to `Employee`. `Employee.get_schvalovatel()` walks up this chain (department head → division head → section head) to find the direct approver; if no manager is set at any level, it returns `None` and an admin must approve manually. `ZadostOStav.save()` auto-assigns `schvalovatele` from this method if not already set — but only for `typ.vyzaduje_schvaleni=True` requests; self-recorded types skip this entirely.
 
+The "Ke schválení" link (menu and home page) is shown by `Employee.schvaluje_zadosti` — head of any `Oddeleni`/`Odbor`/`Sekce`, a deputy, or someone with a request waiting on them — not only heads of an oddělení (an odbor head whose own oddělení has no `vedouci` otherwise never saw it, although `ke_schvaleni`/`schvalit` already accepted them).
+
 **Deputy (`Employee.zastupce`)**: a holder of a funkce with `muze_mit_zastupce` picks a permanent deputy from the same org unit on `accounts:muj_zastupce`. The deputy (a) permanently gets the same CRUD rights as the holder — `Employee._ma_pravo()` / `spravovana_oddeleni()` union the deputy's own funkce with everyone they deputize for — and (b) takes over approvals while the holder is absent: `get_schvalovatel()` returns the deputy when the approver `je_nepritomen()` (`rucne_nepritomen=True`, or an approved non-presence absence covering today). The approver is resolved **once, when the request is created** (`ZadostOStav.save()`), so a request already waiting on someone stays with them even if they become absent later. `Employee.save()` clears `zastupce` when the holder transfers to another `Oddeleni` or their funkce changes.
 
 ### Employee funkce (roles) and access scoping

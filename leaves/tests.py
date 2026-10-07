@@ -682,3 +682,64 @@ class HodinovaDovolenaTests(TestCase):
         self.assertEqual((zadost.cas_od, zadost.cas_do), (time(9, 0), time(11, 30)))
         self.assertEqual(zadost.pocet_hodin, Decimal("2.50"))
         self.assertContains(self.client.get(reverse("leaves:moje_zadosti")), "9:00")
+
+
+class OdkazKeSchvaleniTests(TestCase):
+    """Odkaz „Ke schválení“ (menu i úvodní stránka) vidí každý, kdo schvaluje —
+    i vedoucí odboru, který nevede žádné oddělení (dřív jen vedoucí oddělení)."""
+
+    def setUp(self):
+        sekce = Sekce.objects.create(nazev="Sekce", kod="S1")
+        self.odbor = Odbor.objects.create(sekce=sekce, nazev="Odbor", kod="O1")
+        self.oddeleni = Oddeleni.objects.create(odbor=self.odbor, nazev="Oddělení", kod="OD1")
+        self.vedeni = Oddeleni.objects.create(odbor=self.odbor, nazev="Vedení", kod="OD2")
+        typ_uvazku = TypUvazku.objects.create(
+            nazev="Plný", hodiny_denne=Decimal("8.00"), hodiny_tyydne=Decimal("40.00"),
+        )
+
+        def zamestnanec(email, cislo, oddeleni):
+            user = User.objects.create_user(
+                username=email, email=email, first_name="Jan", last_name=cislo,
+            )
+            return Employee.objects.create(
+                user=user, osobni_cislo=cislo, oddeleni=oddeleni,
+                typ_uvazku=typ_uvazku, datum_nastupu=date(2020, 1, 1),
+            )
+
+        self.vedouci_oddeleni = zamestnanec("vedouci@example.com", "1", self.oddeleni)
+        self.vedouci_odboru = zamestnanec("odbor@example.com", "2", self.vedeni)
+        self.zastupce = zamestnanec("zastupce@example.com", "3", self.oddeleni)
+        self.radovy = zamestnanec("radovy@example.com", "4", self.oddeleni)
+        self.oddeleni.vedouci = self.vedouci_oddeleni
+        self.oddeleni.save()
+        self.odbor.vedouci = self.vedouci_odboru
+        self.odbor.save()
+        # Vedoucí odboru nevede žádné oddělení (jeho „vedení“ nemá vedoucího).
+        Employee.objects.filter(pk=self.zastupce.pk).update(zastupce=None)
+        Employee.objects.filter(pk=self.vedouci_oddeleni.pk).update(zastupce=self.zastupce)
+
+    def _odkaz(self, employee):
+        self.client.force_login(employee.user)
+        return self.client.get(reverse("accounts:home")).content.decode()
+
+    def test_vedouci_odboru_bez_vlastniho_oddeleni_vidi_odkaz(self):
+        self.assertIsNone(self.vedeni.vedouci)
+        self.assertIn(reverse("leaves:ke_schvaleni"), self._odkaz(self.vedouci_odboru))
+
+    def test_vedouci_oddeleni_odkaz_vidi(self):
+        self.assertIn(reverse("leaves:ke_schvaleni"), self._odkaz(self.vedouci_oddeleni))
+
+    def test_zastupce_vedouciho_odkaz_vidi(self):
+        self.assertIn(reverse("leaves:ke_schvaleni"), self._odkaz(self.zastupce))
+
+    def test_radovy_zamestnanec_odkaz_nevidi(self):
+        self.assertNotIn(reverse("leaves:ke_schvaleni"), self._odkaz(self.radovy))
+
+    def test_zamestnanec_s_cekajici_zadosti_ke_schvaleni_odkaz_vidi(self):
+        typ = TypStavu.objects.create(nazev="Dovolená", zkratka="DOV", je_dovolena=True,
+                                      kategorie_pro_prehled=TypStavu.KategoriePrehled.DOVOLENA)
+        ZadostOStav.objects.create(
+            employee=self.vedouci_oddeleni, typ=typ, datum_od=date(2026, 10, 9),
+            datum_do=date(2026, 10, 9), schvalovatele=self.radovy,
+        )
+        self.assertIn(reverse("leaves:ke_schvaleni"), self._odkaz(self.radovy))
