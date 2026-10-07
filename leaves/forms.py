@@ -83,6 +83,14 @@ class ZadostOStavForm(forms.ModelForm):
         return cleaned
 
 
+class SamoschvaleniForm(forms.Form):
+    duvod = forms.CharField(
+        label="Důvod samoschválení",
+        widget=forms.Textarea(attrs={"rows": 3}),
+        error_messages={"required": "Uveďte důvod samoschválení."},
+    )
+
+
 class ZamitnutiForm(forms.Form):
     poznamka = forms.CharField(
         label="Důvod zamítnutí",

@@ -7,7 +7,7 @@ from django.http import HttpResponseForbidden
 from django.utils import timezone
 
 from .models import TypStavu, ZadostOStav, ZustatekStavu
-from .forms import ZadostOStavForm, ZamitnutiForm
+from .forms import SamoschvaleniForm, ZadostOStavForm, ZamitnutiForm
 
 
 @login_required
@@ -99,6 +99,10 @@ def detail_zadosti(request, pk):
     if je_schvalovatel and zadost.stav == ZadostOStav.Stav.CEKA:
         zamitnutí_form = ZamitnutiForm()
 
+    samoschvaleni_form = None
+    if zadost.muze_schvalit_sam(employee):
+        samoschvaleni_form = SamoschvaleniForm()
+
     zustatek = None
     if zadost.typ.odecita_ze_zustatku:
         rok = zadost.datum_od.year
@@ -115,6 +119,7 @@ def detail_zadosti(request, pk):
         "zadost": zadost,
         "je_schvalovatel": je_schvalovatel,
         "zamitnutí_form": zamitnutí_form,
+        "samoschvaleni_form": samoschvaleni_form,
         "zustatek": zustatek,
     })
 
@@ -143,6 +148,41 @@ def schvalit(request, pk):
 
     messages.success(request, f"Žádost {zadost.employee.jmeno} byla schválena.")
     return redirect("leaves:ke_schvaleni")
+
+
+@login_required
+def schvalit_sam(request, pk):
+    """Schvalovatel ve výjimečném případě schválí vlastní čekající žádost (#90) — povinný
+    důvod, žádost se označí jako schválená vlastní osobou."""
+    if request.method != "POST":
+        return redirect("leaves:detail_zadosti", pk=pk)
+
+    zadost = get_object_or_404(ZadostOStav, pk=pk)
+    employee = getattr(request.user, "employee", None)
+
+    if not (employee and zadost.employee_id == employee.pk and employee.schvaluje_zadosti):
+        return HttpResponseForbidden()
+
+    if zadost.stav != ZadostOStav.Stav.CEKA:
+        messages.warning(request, "Žádost již byla vyřízena.")
+        return redirect("leaves:detail_zadosti", pk=pk)
+
+    if not zadost.muze_schvalit_sam(employee):
+        return HttpResponseForbidden()
+
+    form = SamoschvaleniForm(request.POST)
+    if not form.is_valid():
+        messages.error(request, "; ".join(form.errors["duvod"]))
+        return redirect("leaves:detail_zadosti", pk=pk)
+
+    try:
+        zadost.schval(employee, samoschvaleno=True, duvod=form.cleaned_data["duvod"])
+    except ValidationError as e:
+        messages.error(request, "; ".join(e.messages))
+        return redirect("leaves:detail_zadosti", pk=pk)
+
+    messages.success(request, "Žádost byla schválena vlastní osobou.")
+    return redirect("leaves:detail_zadosti", pk=pk)
 
 
 @login_required

@@ -133,6 +133,10 @@ nastaven). Vypočítává `Employee.get_schvalovatel()`.
   indispoziční volno, služební volno, OČR, home office...).
 - Typy s `vyzaduje_schvaleni=True` (dovolená, indispoziční volno) jdou přes
   žádost `ZadostOStav` a schvalovací workflow (e-mail žadateli i schvalovateli).
+  Kdo sám schvaluje žádosti (vedoucí, zástupce), si ve výjimečném případě může
+  vlastní čekající žádost schválit sám tlačítkem „Schválit sám“ v detailu —
+  povinný důvod se uloží k žádosti, ta je označená „Schváleno vlastní osobou“
+  a nadřízenému zmizí z „Ke schválení“ (bez e-mailu).
 - Typy s `vyzaduje_schvaleni=False` (nemoc, OČR, služební volno, home office)
   si zaměstnanec zapisuje sám, rovnou schválené, bez e-mailu.
 - Dovolenou lze zadat i **po hodinách** (čas od–do), pokud to typ stavu povoluje
