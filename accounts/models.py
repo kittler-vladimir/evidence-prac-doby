@@ -569,6 +569,8 @@ class Employee(models.Model):
     def save(self, *args, **kwargs):
         stary = None if self.pk is None else Employee.objects.filter(pk=self.pk).first()
         zmenilo_se_oddeleni = stary is not None and stary.oddeleni_id != self.oddeleni_id
+        # Čte ho leaves.signals (post_save) — při aktivaci zaměstnanci obnoví zůstatky stavů.
+        self._byl_aktivovan = stary is not None and not stary.aktivni and self.aktivni
         vychozi_funkce = None  # Funkce.vychozi() se dotáhne líně a nejvýš jednou za save()
 
         # Přesun do jiného oddělení ukončuje funkci vázanou na předchozí

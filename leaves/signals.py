@@ -1,3 +1,4 @@
+from django.db.models import Q
 from django.db.models.signals import post_save
 from django.dispatch import receiver
 from django.core.mail import send_mail
@@ -28,16 +29,36 @@ def _posli_email(subject: str, template: str, context: dict, recipients: list[st
 def zaloz_zustatky_noveho_zamestnance(sender, instance, created, raw=False, **kwargs):
     """Nový aktivní zaměstnanec dostane hned zůstatky stavů pro letošní rok — stejné, jaké
     by mu k 1. lednu založil příkaz obnov_rocni_naroky (typy odečítající ze zůstatku).
-    Už existující zůstatek se nepřepisuje, takže je to bezpečné i při opakovaném volání."""
-    if raw or not created or not instance.aktivni:
+    Už existující zůstatek se u nového zaměstnance nepřepisuje.
+
+    Při (opětovné) aktivaci neaktivního zaměstnance (Employee.save() nastaví
+    _byl_aktivovan) se letošnímu zůstatku každého takového typu nastaví nárok na
+    výchozí hodnotu — chybějící zůstatek se založí. Už čerpané hodiny se nemění;
+    běžné další uložení aktivního zaměstnance nedělá nic."""
+    if raw or not instance.aktivni:
+        return
+    aktivace = getattr(instance, "_byl_aktivovan", False)
+    if not (created or aktivace):
         return
 
+    # Dovolená a indispoziční volno mají globální nárok vždy, i kdyby u nich admin
+    # nezaškrtl odecita_ze_zustatku (stejný výběr jako „Moje žádosti“ v leaves.views).
+    typy = TypStavu.objects.filter(aktivni=True).filter(
+        Q(odecita_ze_zustatku=True) | Q(je_dovolena=True) | Q(je_indispozicni_volno=True)
+    )
     dnes = timezone.localdate()
-    for typ in TypStavu.objects.filter(odecita_ze_zustatku=True, aktivni=True):
-        ZustatekStavu.objects.get_or_create(
-            employee=instance, rok=dnes.year, typ=typ,
-            defaults={"narok_hodin": typ.vychozi_narok(dnes)},
-        )
+    for typ in typy:
+        vychozi_narok = typ.vychozi_narok(dnes)
+        if aktivace:
+            ZustatekStavu.objects.update_or_create(
+                employee=instance, rok=dnes.year, typ=typ,
+                defaults={"narok_hodin": vychozi_narok},
+            )
+        else:
+            ZustatekStavu.objects.get_or_create(
+                employee=instance, rok=dnes.year, typ=typ,
+                defaults={"narok_hodin": vychozi_narok},
+            )
 
 
 @receiver(post_save, sender=ZadostOStav)

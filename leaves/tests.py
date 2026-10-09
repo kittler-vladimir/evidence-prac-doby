@@ -373,6 +373,52 @@ class ZustatkyNovehoZamestnanceTests(TestCase):
         employee = self._zamestnanec("1", aktivni=False)
         self.assertFalse(ZustatekStavu.objects.filter(employee=employee).exists())
 
+    def test_aktivace_zalozi_chybejici_zustatky(self):
+        employee = self._zamestnanec("1", aktivni=False)
+        employee.aktivni = True
+        employee.save()
+        zustatky = {
+            z.typ_id: z.narok_hodin
+            for z in ZustatekStavu.objects.filter(employee=employee, rok=self.dnes.year)
+        }
+        self.assertEqual(zustatky[self.typ_iv.pk], Decimal("50.00"))
+        self.assertEqual(zustatky[self.typ_dov.pk], Decimal("160.00"))
+        self.assertEqual(set(zustatky), set(self._odecitajici_typy()))
+
+    def test_aktivace_vrati_narok_na_vychozi_a_ponecha_cerpani(self):
+        employee = self._zamestnanec("1")
+        employee.aktivni = False
+        employee.save()
+        ZustatekStavu.objects.filter(employee=employee, typ=self.typ_iv).update(
+            narok_hodin=Decimal("7.00"), cerpano_hodin=Decimal("3.00")
+        )
+        employee.aktivni = True
+        employee.save()
+        zustatek = ZustatekStavu.objects.get(employee=employee, rok=self.dnes.year, typ=self.typ_iv)
+        self.assertEqual(zustatek.narok_hodin, Decimal("50.00"))
+        self.assertEqual(zustatek.cerpano_hodin, Decimal("3.00"))
+        self.assertEqual(
+            ZustatekStavu.objects.filter(employee=employee).count(), len(self._odecitajici_typy())
+        )
+
+    def test_ulozeni_stale_aktivniho_zamestnance_narok_neprepise(self):
+        employee = self._zamestnanec("1")
+        ZustatekStavu.objects.filter(employee=employee, typ=self.typ_iv).update(narok_hodin=Decimal("7.00"))
+        employee.save()
+        employee.save()  # druhé uložení po aktivaci/vzniku také nic nepřepíše
+        zustatek = ZustatekStavu.objects.get(employee=employee, rok=self.dnes.year, typ=self.typ_iv)
+        self.assertEqual(zustatek.narok_hodin, Decimal("7.00"))
+
+    def test_iv_a_dovolena_dostanou_zustatek_i_bez_priznaku_odecita_ze_zustatku(self):
+        TypStavu.objects.filter(pk__in=[self.typ_iv.pk, self.typ_dov.pk]).update(odecita_ze_zustatku=False)
+        employee = self._zamestnanec("1")
+        zustatky = {
+            z.typ_id: z.narok_hodin for z in ZustatekStavu.objects.filter(employee=employee)
+        }
+        self.assertEqual(zustatky[self.typ_iv.pk], Decimal("50.00"))
+        self.assertEqual(zustatky[self.typ_dov.pk], Decimal("160.00"))
+        self.assertNotIn(self.typ_nemoc.pk, zustatky)
+
     def test_neaktivni_typ_stavu_se_preskoci(self):
         self.typ_dov.aktivni = False
         self.typ_dov.save()
