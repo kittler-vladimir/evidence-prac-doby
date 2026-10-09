@@ -4,6 +4,7 @@ Přehled změn, které uživatelé v aplikaci uvidí. Nejnovější nahoře; č�
 
 ## 9. 10. 2026
 
+- Nový zaměstnanec má hned zůstatek dovolené i indispozičního volna a při opětovné aktivaci se mu zůstatky obnoví na výchozí nárok (#95)
 - Novému zaměstnanci se po založení hned zobrazí jeho zůstatek dovolené a indispozičního volna na letošní rok, nečeká se na první žádost (#93)
 
 ## 7. 10. 2026
