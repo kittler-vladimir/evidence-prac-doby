@@ -24,9 +24,12 @@ class TypStavu(models.Model):
     nazev = models.CharField(_("název"), max_length=100)
     zkratka = models.CharField(_("zkratka"), max_length=10)
     odecita_ze_zustatku = models.BooleanField(
-        _("odečítá ze zůstatku dovolené"),
+        _("odečítá ze zůstatku"),
         default=True,
-        help_text=_("Např. nemoc se neodečítá z dovolené."),
+        help_text=_(
+            "Schválená žádost se odečte z ročního zůstatku tohoto typu "
+            "(např. dovolená, indispoziční volno). Např. nemoc se neodečítá."
+        ),
     )
     je_indispozicni_volno = models.BooleanField(
         _("je indispoziční volno"),
