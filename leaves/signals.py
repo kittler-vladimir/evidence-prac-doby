@@ -3,8 +3,11 @@ from django.dispatch import receiver
 from django.core.mail import send_mail
 from django.template.loader import render_to_string
 from django.conf import settings
+from django.utils import timezone
 
-from .models import ZadostOStav
+from accounts.models import Employee
+
+from .models import TypStavu, ZadostOStav, ZustatekStavu
 
 
 def _posli_email(subject: str, template: str, context: dict, recipients: list[str]):
@@ -19,6 +22,22 @@ def _posli_email(subject: str, template: str, context: dict, recipients: list[st
         recipient_list=recipients,
         fail_silently=True,
     )
+
+
+@receiver(post_save, sender=Employee)
+def zaloz_zustatky_noveho_zamestnance(sender, instance, created, raw=False, **kwargs):
+    """Nový aktivní zaměstnanec dostane hned zůstatky stavů pro letošní rok — stejné, jaké
+    by mu k 1. lednu založil příkaz obnov_rocni_naroky (typy odečítající ze zůstatku).
+    Už existující zůstatek se nepřepisuje, takže je to bezpečné i při opakovaném volání."""
+    if raw or not created or not instance.aktivni:
+        return
+
+    dnes = timezone.localdate()
+    for typ in TypStavu.objects.filter(odecita_ze_zustatku=True, aktivni=True):
+        ZustatekStavu.objects.get_or_create(
+            employee=instance, rok=dnes.year, typ=typ,
+            defaults={"narok_hodin": typ.vychozi_narok(dnes)},
+        )
 
 
 @receiver(post_save, sender=ZadostOStav)

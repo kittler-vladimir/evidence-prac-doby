@@ -314,6 +314,92 @@ class ObnovRocniNarokyTests(TestCase):
         self.assertEqual(zustatek.narok_hodin, Decimal("99.00"))
 
 
+class ZustatkyNovehoZamestnanceTests(TestCase):
+    """Nový aktivní zaměstnanec dostane hned zůstatky stavů na letošní rok, bez ohledu
+    na to, jestli už běžel příkaz obnov_rocni_naroky."""
+
+    def setUp(self):
+        sekce = Sekce.objects.create(nazev="Sekce", kod="S1")
+        odbor = Odbor.objects.create(sekce=sekce, nazev="Odbor", kod="O1")
+        self.oddeleni = Oddeleni.objects.create(odbor=odbor, nazev="Oddělení", kod="OD1")
+        self.typ_uvazku = TypUvazku.objects.create(
+            nazev="Plný úvazek", hodiny_denne=Decimal("8.00"), hodiny_tyydne=Decimal("40.00")
+        )
+        self.typ_iv = TypStavu.objects.create(
+            nazev="Indispoziční volno", zkratka="IV",
+            odecita_ze_zustatku=True, je_indispozicni_volno=True,
+            kategorie_pro_prehled=TypStavu.KategoriePrehled.INDISPOZICNI_VOLNO,
+        )
+        self.typ_dov = TypStavu.objects.create(
+            nazev="Dovolená", zkratka="DOV",
+            odecita_ze_zustatku=True, je_dovolena=True,
+            kategorie_pro_prehled=TypStavu.KategoriePrehled.DOVOLENA,
+        )
+        self.typ_nemoc = TypStavu.objects.create(
+            nazev="Nemoc", zkratka="NEM", odecita_ze_zustatku=False, vyzaduje_schvaleni=False,
+            kategorie_pro_prehled=TypStavu.KategoriePrehled.NEMOC,
+        )
+        self.dnes = timezone.localdate()
+        NarokIndispozicnihoVolna.objects.create(hodin=Decimal("50.00"), platne_od=date(2020, 1, 1))
+        NarokDovolene.objects.create(hodin=Decimal("160.00"), platne_od=date(2020, 1, 1))
+
+    def _zamestnanec(self, cislo, **kwargs):
+        user = User.objects.create_user(
+            username=f"z{cislo}@example.com", email=f"z{cislo}@example.com",
+            first_name="Jan", last_name=f"Novák{cislo}",
+        )
+        return Employee.objects.create(
+            user=user, osobni_cislo=cislo, oddeleni=self.oddeleni,
+            typ_uvazku=self.typ_uvazku, datum_nastupu=date(2020, 1, 1), **kwargs,
+        )
+
+    def _odecitajici_typy(self):
+        return TypStavu.objects.filter(odecita_ze_zustatku=True, aktivni=True).values_list("pk", flat=True)
+
+    def test_novy_zamestnanec_dostane_zustatky_odecitajicich_typu(self):
+        employee = self._zamestnanec("1")
+        zustatky = {
+            z.typ_id: z.narok_hodin
+            for z in ZustatekStavu.objects.filter(employee=employee, rok=self.dnes.year)
+        }
+        self.assertEqual(zustatky[self.typ_iv.pk], Decimal("50.00"))
+        self.assertEqual(zustatky[self.typ_dov.pk], Decimal("160.00"))
+        self.assertNotIn(self.typ_nemoc.pk, zustatky)
+        # Přesně jeden zůstatek na každý aktivní typ odečítající ze zůstatku
+        # (migrace mohou nasadit i další typy než ty z setUp).
+        self.assertEqual(set(zustatky), set(self._odecitajici_typy()))
+
+    def test_neaktivni_zamestnanec_zustatky_nedostane(self):
+        employee = self._zamestnanec("1", aktivni=False)
+        self.assertFalse(ZustatekStavu.objects.filter(employee=employee).exists())
+
+    def test_neaktivni_typ_stavu_se_preskoci(self):
+        self.typ_dov.aktivni = False
+        self.typ_dov.save()
+        employee = self._zamestnanec("1")
+        self.assertFalse(ZustatekStavu.objects.filter(employee=employee, typ=self.typ_dov).exists())
+        self.assertTrue(ZustatekStavu.objects.filter(employee=employee, typ=self.typ_iv).exists())
+
+    def test_dalsi_ulozeni_zamestnance_zustatky_nezmeni_ani_nezduplikuje(self):
+        employee = self._zamestnanec("1")
+        zustatek = ZustatekStavu.objects.get(employee=employee, rok=self.dnes.year, typ=self.typ_iv)
+        zustatek.cerpano_hodin = Decimal("10.00")
+        zustatek.save()
+        employee.save()
+        self.assertEqual(
+            ZustatekStavu.objects.filter(employee=employee).count(), len(self._odecitajici_typy())
+        )
+        zustatek.refresh_from_db()
+        self.assertEqual(zustatek.cerpano_hodin, Decimal("10.00"))
+
+    def test_obnov_rocni_naroky_po_zalozeni_zamestnance_nic_nedoplni(self):
+        employee = self._zamestnanec("1")
+        pred = ZustatekStavu.objects.filter(employee=employee).count()
+        call_command("obnov_rocni_naroky", rok=self.dnes.year)
+        self.assertEqual(ZustatekStavu.objects.filter(employee=employee).count(), pred)
+        self.assertEqual(pred, len(self._odecitajici_typy()))
+
+
 class HodinyZadostiPodleTypuUvazkuTests(TestCase):
     """Issue #74 — hodiny žádosti: u pevné pracovní doby čistá doba bloků daného dne
     (stejná norma jako ve Výkazu, #72), u pružné hodiny_denne každý den Po–Pá."""

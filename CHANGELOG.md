@@ -2,6 +2,10 @@
 
 Přehled změn, které uživatelé v aplikaci uvidí. Nejnovější nahoře; číslo v závorce odkazuje na issue na GitHubu.
 
+## 9. 10. 2026
+
+- Novému zaměstnanci se po založení hned zobrazí jeho zůstatek dovolené a indispozičního volna na letošní rok, nečeká se na první žádost (#93)
+
 ## 7. 10. 2026
 
 - Vedoucí si ve výjimečném případě může schválit vlastní žádost sám, s povinným uvedením důvodu (#90)
