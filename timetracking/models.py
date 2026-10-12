@@ -424,6 +424,10 @@ class WorkdaySummary(models.Model):
                 intervaly.append([s.zacatek, s.konec])
 
         pohyby_minuty = 0
+        # Úseky započítané práce a z nich odečtených pohybů — hodinová dovolená
+        # se do bilance započítá jen mimo ně (#97).
+        useky_prace = []
+        useky_pohybu = []
 
         if je_pevna:
             # U pevné pracovní doby se počítá jen čas ležící uvnitř bloků
@@ -440,11 +444,13 @@ class WorkdaySummary(models.Model):
                     typ_uvazku=employee.typ_uvazku, **{den_pole: True}
                 )
             ]
-            hrube_minuty = sum(
-                prekryv_minut(od, do, blok_od, blok_do)
+            useky_prace = [
+                (max(od, blok_od), min(do, blok_do))
                 for od, do in intervaly
                 for blok_od, blok_do in bloky_dne
-            )
+                if min(do, blok_do) > max(od, blok_od)
+            ]
+            hrube_minuty = sum(prekryv_minut(od, do, od, do) for od, do in useky_prace)
 
             # Pohyby se u pevné doby neodečítají, pokud jejich typ má u pevné doby
             # „započítává se“ (výchozí) — odpracovaná doba je pak dána jen blokem.
@@ -454,12 +460,18 @@ class WorkdaySummary(models.Model):
                     prekryv_minut(p.zacatek, p.konec, blok_od, blok_do)
                     for blok_od, blok_do in bloky_dne
                 )
+                useky_pohybu += [
+                    (max(p.zacatek, blok_od), min(p.konec, blok_do))
+                    for blok_od, blok_do in bloky_dne
+                    if min(p.konec, blok_do) > max(p.zacatek, blok_od)
+                ]
 
             # Denní norma pevné doby je čistá doba bloků toho dne, ne paušální
             # hodiny_denne — viz TypUvazku.norma_minut(). Pátek 7:30–15:00 (7 h
             # čistého času) by jinak při odpracování celého bloku ukázal nedostatek.
         else:
             hrube_minuty = sum(int((do - od).total_seconds() // 60) for od, do in intervaly)
+            useky_prace = [tuple(i) for i in intervaly]
 
             # Pružná doba: „nezapočítává se“ odečte celý pohyb stejně jako povinnou
             # přestávku, „započítává se“ ho neodečte vůbec a „jen v jádrové době“
@@ -476,10 +488,19 @@ class WorkdaySummary(models.Model):
                 trvani = p.trvani_minut() or 0
                 if p.typ.zapocitani_pruzna == Zapocitani.NE:
                     pohyby_minuty += trvani
+                    useky_pohybu.append((p.zacatek, p.konec))
                 elif jadro:
                     pohyby_minuty += max(
                         trvani - prekryv_minut(p.zacatek, p.konec, jadro_od, jadro_do), 0
                     )
+                    useky_pohybu += [
+                        (od, do)
+                        for od, do in (
+                            (p.zacatek, min(p.konec, jadro_od)),
+                            (max(p.zacatek, jadro_do), p.konec),
+                        )
+                        if do > od
+                    ]
 
         prestavka = mandatory_break if hrube_minuty > break_threshold else 0
 
@@ -487,10 +508,14 @@ class WorkdaySummary(models.Model):
 
         # Přesčas / nedostatek proti denní normě úvazku (pevná doba: z bloků dne).
         # Schválená hodinová dovolená dne se do normy započítá — 6 h práce + 2 h
-        # dovolené na osmihodinovém dni je vyrovnaná bilance (#82).
+        # dovolené na osmihodinovém dni je vyrovnaná bilance (#82). Část dovolené,
+        # kdy zaměstnanec přesto pracoval, je už v odpracované době — nezapočítá se
+        # podruhé (#97).
         from leaves.models import ZadostOStav
 
-        volno = ZadostOStav.hodinove_volno_minuty(employee, datum)
+        volno = ZadostOStav.hodinove_volno_minuty(
+            employee, datum, useky_prace=useky_prace, useky_pohybu=useky_pohybu
+        )
         prescos = odpracovane + volno - employee.typ_uvazku.norma_minut(datum)
 
         je_svatek = StatniSvatek.objects.filter(datum=datum).exists()

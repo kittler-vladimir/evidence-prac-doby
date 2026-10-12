@@ -751,6 +751,34 @@ class HodinovaDovolenaTests(TestCase):
         souhrn.refresh_from_db()
         self.assertEqual(souhrn.prescos_minuty, 0)  # 6 h + 2 h dovolené − 8 h normy
 
+    def test_dovolena_v_dobe_prace_se_nezapocita_podruhe(self):
+        """#97 — pátek pevné doby celý v práci a k tomu schválená dovolená 11:00–15:00:
+        bilance 0, ne +4 h (dovolená se kryje s odpracovanou dobou)."""
+        den = self.PATEK
+        self._uloz(self.emp_pevna, den, den, time(11, 0), time(15, 0)).schval(self.emp_pruzna)
+        WorkSession.objects.create(
+            employee=self.emp_pevna,
+            zacatek=timezone.make_aware(datetime.combine(den, time(7, 2))),
+            konec=timezone.make_aware(datetime.combine(den, time(15, 0))),
+        )
+        souhrn = WorkdaySummary.objects.get(employee=self.emp_pevna, datum=den)
+        self.assertEqual(souhrn.odpracovane_minuty, 420)
+        self.assertEqual(souhrn.prescos_minuty, 0)
+
+    def test_dovolena_castecne_v_dobe_prace_se_zapocita_jen_mimo_praci(self):
+        """Pružná doba 8:00–15:30 (7 h po přestávce), dovolená 14:30–16:30: z dovolené
+        se započte jen hodina 15:30–16:30, bilance 0."""
+        den = self.PONDELI
+        self._uloz(self.emp_pruzna, den, den, time(14, 30), time(16, 30)).schval(self.emp_pevna)
+        WorkSession.objects.create(
+            employee=self.emp_pruzna,
+            zacatek=timezone.make_aware(datetime.combine(den, time(8, 0))),
+            konec=timezone.make_aware(datetime.combine(den, time(15, 30))),
+        )
+        souhrn = WorkdaySummary.objects.get(employee=self.emp_pruzna, datum=den)
+        self.assertEqual(souhrn.odpracovane_minuty, 420)
+        self.assertEqual(souhrn.prescos_minuty, 0)
+
     def test_den_bez_hodinove_dovolene_se_nemeni(self):
         den = self.PONDELI
         zacatek = timezone.make_aware(datetime.combine(den, time(8, 0)))
