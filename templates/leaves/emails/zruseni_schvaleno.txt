@@ -1,0 +1,6 @@
+Dobrý den {{ zadost.employee.jmeno }},
+
+zrušení Vaší žádosti o {{ zadost.typ.nazev|lower }} ({{ zruseni.popis_rozsahu }}) bylo schváleno.
+Schválil/a: {{ zruseni.schvaleno_kym.jmeno }}
+
+-- Evidence pracovní doby

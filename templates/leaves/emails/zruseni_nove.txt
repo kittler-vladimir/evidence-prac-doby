@@ -1,0 +1,12 @@
+Dobrý den,
+
+zaměstnanec {{ zadost.employee.jmeno }} žádá o zrušení schválené žádosti.
+
+Typ: {{ zadost.typ.nazev }}
+Původní žádost: {{ zadost.datum_od|date:"j. F Y" }} – {{ zadost.datum_do|date:"j. F Y" }}
+Rušit: {{ zruseni.popis_rozsahu }}
+{% if zruseni.poznamka_zamestnance %}Poznámka: {{ zruseni.poznamka_zamestnance }}{% endif %}
+
+Prosím přihlaste se do systému a žádost o zrušení vyřiďte.
+
+-- Evidence pracovní doby

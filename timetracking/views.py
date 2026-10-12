@@ -3,9 +3,13 @@ from datetime import datetime, timedelta
 from django.contrib.auth.decorators import login_required
 from django.contrib import messages
 from django.core.exceptions import ValidationError
+from django.db import transaction
 from django.shortcuts import render, redirect, get_object_or_404
 from django.utils import timezone
 from django.http import HttpResponseForbidden
+
+from leaves.models import ZadostOStav
+from leaves.views import zprava_o_zruseni
 
 from .bilance import rozdel_na_tydny, secti
 from .models import WorkSession, WorkdaySummary, Pohyb, TypPohybu
@@ -171,10 +175,62 @@ def clock_in(request):
     if zacatek is None:
         return redirect("timetracking:dashboard")
 
+    # Schválená/čekající nepřítomnost na dnešek (#100): příchod se nikdy neblokuje, ale
+    # zaměstnanec se nejdřív upozorní a může ji zrušit. Bez výslovné volby ('akce') se jen
+    # zobrazí upozornění — nic se nezaznamená.
+    akce = request.POST.get("akce", "")
+    if akce not in ("prece", "zrusit"):
+        konflikty = ZadostOStav.konflikty_pro_prichod(employee, zacatek)
+        if konflikty:
+            return render(request, "timetracking/upozorneni_nepritomnost.html", {
+                "konflikty": konflikty,
+                "cas": request.POST.get("cas", "").strip(),
+            })
+
+    # Příchod a případné zrušení nepřítomnosti jsou jedna akce: když zrušení selže,
+    # nezapíše se ani příchod a uživatel to může zkusit znovu.
     session = WorkSession(employee=employee, zacatek=zacatek, zdroj=WorkSession.Zdroj.PRICHOD)
-    if _uloz_nebo_chybu(request, session):
-        messages.success(request, "Příchod zaznamenán.")
+    try:
+        with transaction.atomic():
+            session.full_clean()
+            session.save()
+            zprava = (
+                _zrus_nepritomnost_pri_prichodu(request, employee, zacatek)
+                if akce == "zrusit" else None
+            )
+    except ValidationError as e:
+        messages.error(request, "; ".join(e.messages))
+        return redirect("timetracking:dashboard")
+
+    messages.success(request, "Příchod zaznamenán.")
+    if zprava:
+        messages.success(request, zprava)
     return redirect("timetracking:dashboard")
+
+
+def _zrus_nepritomnost_pri_prichodu(request, employee, zacatek):
+    """Provede volbu „Zrušit nepřítomnost“ z upozornění při příchodu (#100): čekající
+    žádost se stornuje, schválená se zruší celá nebo jen dnešek (typ se schvalováním
+    vytvoří žádost o zrušení). Žádost musí být jedna z těch, která s příchodem kolidují.
+    Vrací zprávu pro uživatele; chyba je ValidationError (volající vrací transakci)."""
+    try:
+        zadost = next(
+            z for z in ZadostOStav.konflikty_pro_prichod(employee, zacatek)
+            if z.pk == int(request.POST.get("zadost", ""))
+        )
+    except (StopIteration, ValueError):
+        raise ValidationError("Zvolenou nepřítomnost se nepodařilo najít.")
+
+    if zadost.stav == ZadostOStav.Stav.CEKA:
+        zadost.stav = ZadostOStav.Stav.STORNOVÁNO
+        zadost.save()
+        return "Čekající žádost byla stornována."
+    od = do = None
+    if request.POST.get("rozsah") == "dnes":
+        if not zadost.lze_zrusit_jen_dnes:
+            raise ValidationError("Tuto žádost lze zrušit jen celou.")
+        od = do = timezone.localdate(zacatek)
+    return zprava_o_zruseni(zadost.zrus_nepritomnost(od, do))
 
 
 @login_required

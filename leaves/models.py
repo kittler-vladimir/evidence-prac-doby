@@ -1,7 +1,7 @@
 from datetime import datetime, time, timedelta
 from decimal import Decimal
 
-from django.db import models
+from django.db import models, transaction
 from django.utils.translation import gettext_lazy as _
 from django.core.exceptions import ValidationError
 from django.utils import timezone
@@ -537,6 +537,148 @@ class ZadostOStav(models.Model):
         minuty = sum(self.hodiny_po_dnech().values())
         self.pocet_hodin = (Decimal(minuty) / 60).quantize(Decimal("0.01"))
 
+    @classmethod
+    def konflikty_pro_prichod(cls, employee, cas):
+        """Žádosti (čekající i schválené), které kolidují s příchodem v čase `cas` (#100):
+        kryjí dnešek jako započítaný den a nejde o typ přítomnosti (home office). U hodinové
+        žádosti jen tehdy, když její okno dnes ještě neskončilo před příchodem."""
+        mistni = timezone.localtime(cas)
+        dnes = mistni.date()
+        minuta = mistni.hour * 60 + mistni.minute
+        zadosti = cls.objects.filter(
+            employee=employee,
+            stav__in=[cls.Stav.CEKA, cls.Stav.SCHVALENO],
+            datum_od__lte=dnes,
+            datum_do__gte=dnes,
+            typ__je_pritomnost=False,
+        ).select_related("typ", "employee__typ_uvazku").order_by("datum_od", "pk")
+        konflikty = []
+        for zadost in zadosti:
+            if dnes not in zadost.hodiny_po_dnech():
+                continue
+            if zadost.je_po_hodinach and zadost.intervaly_po_dnech()[dnes][1] <= minuta:
+                continue
+            konflikty.append(zadost)
+        return konflikty
+
+    @property
+    def lze_zrusit_jen_dnes(self):
+        """Má smysl nabídnout zrušení jen jednoho dne: vícedenní žádost na celé dny.
+        Hodinovou žádost (souvislý interval) lze zrušit jen celou."""
+        return not self.je_po_hodinach and self.datum_od != self.datum_do
+
+    def cekajici_zruseni(self):
+        """Čekající žádost o zrušení této (schválené) žádosti, nebo None."""
+        return self.zadosti_o_zruseni.filter(stav=ZadostOZruseni.Stav.CEKA).first()
+
+    @property
+    def ma_cekajici_zruseni(self):
+        return self.cekajici_zruseni() is not None
+
+    def _zkontroluj_zruseni(self, od, do):
+        """Strukturální pravidla zrušení schválené žádosti (#100) — vrací (od, do). Platí
+        při podání i při schválení; co už je v minulosti, řeší jen `_rozsah_zruseni`."""
+        od = od or self.datum_od
+        do = do or self.datum_do
+        if self.stav != self.Stav.SCHVALENO:
+            raise ValidationError(_("Zrušit lze jen schválenou žádost."))
+        if od > do or od < self.datum_od or do > self.datum_do:
+            raise ValidationError(_("Rozsah zrušení musí ležet uvnitř žádosti."))
+        if (od, do) != (self.datum_od, self.datum_do) and self.je_po_hodinach:
+            raise ValidationError(_("Hodinovou žádost lze zrušit jen celou."))
+        zrusene = ZadostOStav(employee=self.employee, typ=self.typ, datum_od=od, datum_do=do)
+        zrusene.vypocitej_hodiny()
+        if zrusene.pocet_hodin <= 0 and not self.je_po_hodinach:
+            raise ValidationError(_("V rozsahu zrušení není žádný pracovní den."))
+        return od, do
+
+    def _rozsah_zruseni(self, od, do):
+        """Rozsah zrušení při podání (#100): už proběhlé dny se nezrušují — celá žádost,
+        která už začala, se ruší jen od dneška; skončenou (a započatou hodinovou) nelze."""
+        dnes = timezone.localdate()
+        if self.datum_do < dnes:
+            raise ValidationError(_("Žádost, která už skončila, nelze zrušit."))
+        if od is None and self.datum_od < dnes:
+            if self.je_po_hodinach:
+                raise ValidationError(_("Hodinovou žádost, která už začala, nelze zrušit."))
+            od = dnes
+        elif od is not None and od < dnes:
+            raise ValidationError(_("Už proběhlé dny nelze zrušit."))
+        return self._zkontroluj_zruseni(od, do)
+
+    def zrus_nepritomnost(self, od=None, do=None, poznamka=""):
+        """Zaměstnanec ruší svou schválenou žádost, celou nebo (vícedenní na celé dny) jen
+        dny od–do (#100). Typ bez schvalování se zruší hned a vrací None; typ se
+        schvalováním vytvoří žádost o zrušení pro schvalovatele a vrací ji."""
+        od, do = self._rozsah_zruseni(od, do)
+        if not self.typ.vyzaduje_schvaleni:
+            self.zrus(od, do)
+            return None
+        if self.cekajici_zruseni():
+            raise ValidationError(_("Žádost o zrušení už čeká na schválení."))
+        return ZadostOZruseni.objects.create(
+            zadost=self, datum_od=od, datum_do=do, poznamka_zamestnance=poznamka,
+        )
+
+    def zrus(self, od=None, do=None):
+        """Provede zrušení schválené žádosti: celé (stav `stornovano`), nebo jen dny od–do
+        vícedenní žádosti na celé dny — ta se rozdělí na zbylé schválené části před a po.
+        Hodiny zrušené části se vrátí do zůstatku (jen u typů, kterým je `schval()` odečetl).
+        Vrací počet vrácených hodin."""
+        od, do = self._zkontroluj_zruseni(od, do)
+        with transaction.atomic():
+            puvodni_hodiny = self.pocet_hodin
+            rok = self.datum_od.year
+            useky = []
+            if (od, do) != (self.datum_od, self.datum_do):
+                for a, b in (
+                    (self.datum_od, od - timedelta(days=1)),
+                    (do + timedelta(days=1), self.datum_do),
+                ):
+                    if a > b:
+                        continue
+                    cast = ZadostOStav(
+                        employee=self.employee, typ=self.typ, datum_od=a, datum_do=b,
+                    )
+                    cast.vypocitej_hodiny()
+                    if cast.pocet_hodin > 0:
+                        useky.append(cast)
+
+            if not useky:
+                self.stav = self.Stav.STORNOVÁNO
+                self.save()
+                vratit = puvodni_hodiny
+            else:
+                prvni, *dalsi = useky
+                self.datum_od, self.datum_do = prvni.datum_od, prvni.datum_do
+                self.pocet_hodin = prvni.pocet_hodin
+                self.save()
+                for cast in dalsi:
+                    cast.stav = self.Stav.SCHVALENO
+                    cast.schvalovatele = self.schvalovatele
+                    cast.schvaleno_kym = self.schvaleno_kym
+                    cast.schvaleno_kdy = self.schvaleno_kdy
+                    cast.samoschvaleno = self.samoschvaleno
+                    cast.poznamka_zamestnance = self.poznamka_zamestnance
+                    cast.poznamka_schvalovatele = self.poznamka_schvalovatele
+                    cast._bez_notifikace = True
+                    cast.save()
+                    # save() u typů bez schvalování přepíše schválení „teď“ — části mají
+                    # zachovat audit původní žádosti.
+                    ZadostOStav.objects.filter(pk=cast.pk).update(
+                        schvaleno_kdy=self.schvaleno_kdy, vytvoreno=self.vytvoreno,
+                    )
+                vratit = puvodni_hodiny - sum(c.pocet_hodin for c in useky)
+
+            if vratit > 0 and self.typ.vyzaduje_schvaleni and self.typ.odecita_ze_zustatku:
+                zustatek = ZustatekStavu.objects.filter(
+                    employee=self.employee, rok=rok, typ=self.typ
+                ).first()
+                if zustatek:
+                    zustatek.cerpano_hodin = max(zustatek.cerpano_hodin - vratit, 0)
+                    zustatek.save()
+        return vratit
+
     def muze_schvalit_sam(self, employee):
         """Smí `employee` schválit tuto žádost sám sobě (#90)? Jen vlastní čekající žádost
         zaměstnance, který jinak schvaluje žádosti (vedoucí, zástupce)."""
@@ -610,9 +752,122 @@ class ZadostOStav(models.Model):
             # Žádost vyžadující schválení — přiřadit schvalovatele, pokud není.
             self.schvalovatele = self.employee.get_schvalovatel()
 
-        super().save(*args, **kwargs)
-
         # Signálu se hodí vědět, jestli šlo o skutečný přechod stavu (aby
         # neposílal "schváleno/zamítnuto" znovu při každém dalším uložení
-        # už vyřízené žádosti, např. při editaci poznámky v adminu).
+        # už vyřízené žádosti, např. při editaci poznámky v adminu). Nastavuje se
+        # PŘED uložením — signál běží uvnitř save() a u znovu použité instance by
+        # jinak viděl hodnotu z předchozího uložení.
         self._stav_se_zmenil = je_novy or puvodni_stav != self.stav
+
+        super().save(*args, **kwargs)
+
+
+class ZadostOZruseni(models.Model):
+    """
+    Žádost zaměstnance o zrušení své už schválené žádosti (#100) u typů se schvalováním
+    (dovolená, indispoziční volno). Do schválení platí původní žádost beze změny; po
+    schválení se provede `ZadostOStav.zrus()` pro rozsah `datum_od`–`datum_do`.
+    """
+
+    class Stav(models.TextChoices):
+        CEKA = "ceka", _("Čeká na schválení")
+        SCHVALENO = "schvaleno", _("Schváleno")
+        ZAMITNUTO = "zamitnuto", _("Zamítnuto")
+
+    zadost = models.ForeignKey(
+        ZadostOStav,
+        on_delete=models.CASCADE,
+        related_name="zadosti_o_zruseni",
+        verbose_name=_("zrušovaná žádost"),
+    )
+    datum_od = models.DateField(_("rušit od"))
+    datum_do = models.DateField(_("rušit do"))
+    stav = models.CharField(_("stav"), max_length=12, choices=Stav.choices, default=Stav.CEKA)
+    schvalovatel = models.ForeignKey(
+        "accounts.Employee",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="zruseni_ke_schvaleni",
+        verbose_name=_("schvaluje"),
+    )
+    schvaleno_kym = models.ForeignKey(
+        "accounts.Employee",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="schvalil_zruseni",
+        verbose_name=_("vyřídil"),
+    )
+    schvaleno_kdy = models.DateTimeField(_("vyřízeno kdy"), null=True, blank=True)
+    samoschvaleno = models.BooleanField(_("schváleno vlastní osobou"), default=False)
+    poznamka_zamestnance = models.TextField(_("poznámka zaměstnance"), blank=True)
+    poznamka_schvalovatele = models.TextField(_("poznámka schvalovatele"), blank=True)
+    vytvoreno = models.DateTimeField(_("vytvořeno"), auto_now_add=True)
+
+    class Meta:
+        verbose_name = _("žádost o zrušení")
+        verbose_name_plural = _("žádosti o zrušení")
+        ordering = ["-vytvoreno"]
+
+    def __str__(self):
+        return f"Zrušení: {self.zadost} | {self.get_stav_display()}"
+
+    @property
+    def employee(self):
+        return self.zadost.employee
+
+    def popis_rozsahu(self):
+        def den(d):
+            return f"{d.day}. {d.month}. {d.year}"
+
+        if self.datum_od == self.datum_do:
+            return den(self.datum_od)
+        return f"{den(self.datum_od)} – {den(self.datum_do)}"
+
+    def muze_schvalit_sam(self, employee):
+        """Smí `employee` schválit zrušení vlastní žádosti sám (stejná pravidla jako #90)?"""
+        return bool(
+            employee
+            and self.zadost.employee_id == employee.pk
+            and self.stav == self.Stav.CEKA
+            and employee.schvaluje_zadosti
+        )
+
+    def schval(self, schvalovatel, samoschvaleno=False, duvod=""):
+        """Schválí zrušení a provede ho na původní žádosti."""
+        if self.stav != self.Stav.CEKA:
+            raise ValidationError(_("Žádost o zrušení už byla vyřízena."))
+        with transaction.atomic():
+            self.zadost.zrus(self.datum_od, self.datum_do)
+            self.stav = self.Stav.SCHVALENO
+            self.schvaleno_kym = schvalovatel
+            self.schvaleno_kdy = timezone.now()
+            if samoschvaleno:
+                self.samoschvaleno = True
+                self.poznamka_schvalovatele = duvod
+            self.save()
+
+    def zamitni(self, schvalovatel, poznamka=""):
+        """Zamítne zrušení — původní žádost zůstane schválená beze změny."""
+        if self.stav != self.Stav.CEKA:
+            raise ValidationError(_("Žádost o zrušení už byla vyřízena."))
+        self.stav = self.Stav.ZAMITNUTO
+        self.schvaleno_kym = schvalovatel
+        self.schvaleno_kdy = timezone.now()
+        self.poznamka_schvalovatele = poznamka
+        self.save()
+
+    def save(self, *args, **kwargs):
+        je_nova = self.pk is None
+        puvodni_stav = None
+        if not je_nova:
+            puvodni_stav = (
+                ZadostOZruseni.objects.filter(pk=self.pk).values_list("stav", flat=True).first()
+            )
+        if je_nova and not self.schvalovatel_id:
+            # Stejný řetězec jako u původní žádosti, ale určený až teď — nadřízený se
+            # mohl od schválení změnit nebo být nepřítomen (zástupce).
+            self.schvalovatel = self.zadost.employee.get_schvalovatel()
+        self._stav_se_zmenil = je_nova or puvodni_stav != self.stav
+        super().save(*args, **kwargs)
