@@ -4,6 +4,7 @@ Přehled změn, které uživatelé v aplikaci uvidí. Nejnovější nahoře; č�
 
 ## 12. 10. 2026
 
+- Při příchodu do práce vás aplikace upozorní na schválenou dovolenou nebo jiné volno a nabídne jeho zrušení, schválenou dovolenou lze zrušit žádostí o zrušení (#100)
 - Hodinová dovolená se už nezapočítá do přesčasu podruhé, když zaměstnanec v její době pracoval (#97)
 
 ## 9. 10. 2026
