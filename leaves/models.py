@@ -567,6 +567,52 @@ class ZadostOStav(models.Model):
         Hodinovou žádost (souvislý interval) lze zrušit jen celou."""
         return not self.je_po_hodinach and self.datum_od != self.datum_do
 
+    @property
+    def je_rozpracovana(self):
+        """Žádost už začala, ale ještě neskončila (dnes je v jejím rozsahu, nezačíná dnes)."""
+        dnes = timezone.localdate()
+        return self.datum_od < dnes <= self.datum_do
+
+    @property
+    def je_skoncena(self):
+        return self.datum_do < timezone.localdate()
+
+    @property
+    def lze_zrusit_zbyvajici(self):
+        """Nabídnout „zrušit zbývající dny“: rozpracovaná žádost na celé dny, které má od
+        dneška do konce aspoň jeden pracovní den (#103)."""
+        if not self.je_rozpracovana or self.je_po_hodinach:
+            return False
+        zbytek = ZadostOStav(
+            employee=self.employee, typ=self.typ,
+            datum_od=timezone.localdate(), datum_do=self.datum_do,
+        )
+        zbytek.vypocitej_hodiny()
+        return zbytek.pocet_hodin > 0
+
+    @property
+    def lze_zrusit_pri_prichodu(self):
+        """Příchod nabízí zrušení všude kromě rozpracované hodinové žádosti — ta jde zrušit
+        jen celá, včetně už proběhlých dnů, a to se nemá stát mimochodem při příchodu."""
+        return not (self.je_po_hodinach and self.je_rozpracovana)
+
+    def rozsah_zruseni(self, volba):
+        """Rozsah dnů pro volbu zrušení z detailu/příchodu (#103) — vrací `(od, do)`:
+        `cely` = celá žádost včetně už proběhlých dnů (None, None), `zbyvajici` = od dneška
+        do konce rozpracované žádosti na celé dny, `dnes` = jen dnešek vícedenní žádosti."""
+        dnes = timezone.localdate()
+        if volba == "cely":
+            return None, None
+        if volba == "zbyvajici":
+            if not self.lze_zrusit_zbyvajici:
+                raise ValidationError(_("Zbývající dny lze zrušit jen u rozpracované žádosti."))
+            return dnes, self.datum_do
+        if volba == "dnes":
+            if not (self.lze_zrusit_jen_dnes and self.datum_od <= dnes <= self.datum_do):
+                raise ValidationError(_("Tuto žádost lze zrušit jen celou."))
+            return dnes, dnes
+        raise ValidationError(_("Neplatný rozsah zrušení."))
+
     def cekajici_zruseni(self):
         """Čekající žádost o zrušení této (schválené) žádosti, nebo None."""
         return self.zadosti_o_zruseni.filter(stav=ZadostOZruseni.Stav.CEKA).first()
@@ -576,8 +622,8 @@ class ZadostOStav(models.Model):
         return self.cekajici_zruseni() is not None
 
     def _zkontroluj_zruseni(self, od, do):
-        """Strukturální pravidla zrušení schválené žádosti (#100) — vrací (od, do). Platí
-        při podání i při schválení; co už je v minulosti, řeší jen `_rozsah_zruseni`."""
+        """Pravidla zrušení schválené žádosti (#100, #103) — vrací (od, do). Platí při podání
+        i při schválení; zrušit lze i už proběhlé dny (zpětně), bez časového limitu."""
         od = od or self.datum_od
         do = do or self.datum_do
         if self.stav != self.Stav.SCHVALENO:
@@ -592,25 +638,12 @@ class ZadostOStav(models.Model):
             raise ValidationError(_("V rozsahu zrušení není žádný pracovní den."))
         return od, do
 
-    def _rozsah_zruseni(self, od, do):
-        """Rozsah zrušení při podání (#100): už proběhlé dny se nezrušují — celá žádost,
-        která už začala, se ruší jen od dneška; skončenou (a započatou hodinovou) nelze."""
-        dnes = timezone.localdate()
-        if self.datum_do < dnes:
-            raise ValidationError(_("Žádost, která už skončila, nelze zrušit."))
-        if od is None and self.datum_od < dnes:
-            if self.je_po_hodinach:
-                raise ValidationError(_("Hodinovou žádost, která už začala, nelze zrušit."))
-            od = dnes
-        elif od is not None and od < dnes:
-            raise ValidationError(_("Už proběhlé dny nelze zrušit."))
-        return self._zkontroluj_zruseni(od, do)
-
     def zrus_nepritomnost(self, od=None, do=None, poznamka=""):
-        """Zaměstnanec ruší svou schválenou žádost, celou nebo (vícedenní na celé dny) jen
-        dny od–do (#100). Typ bez schvalování se zruší hned a vrací None; typ se
-        schvalováním vytvoří žádost o zrušení pro schvalovatele a vrací ji."""
-        od, do = self._rozsah_zruseni(od, do)
+        """Zaměstnanec ruší svou schválenou žádost, celou (i už proběhlou, #103) nebo
+        (vícedenní na celé dny) jen dny od–do (#100). Typ bez schvalování se zruší hned
+        a vrací None; typ se schvalováním vytvoří žádost o zrušení pro schvalovatele
+        a vrací ji."""
+        od, do = self._zkontroluj_zruseni(od, do)
         if not self.typ.vyzaduje_schvaleni:
             self.zrus(od, do)
             return None
@@ -816,6 +849,12 @@ class ZadostOZruseni(models.Model):
     @property
     def employee(self):
         return self.zadost.employee
+
+    @property
+    def je_zpetne(self):
+        """Ruší dny, které už začaly (#103) — počítá se při zobrazení, ne při podání:
+        schvalovatel rozhoduje o dnech, jak vypadají teď."""
+        return self.datum_od < timezone.localdate()
 
     def popis_rozsahu(self):
         def den(d):

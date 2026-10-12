@@ -122,13 +122,17 @@
           <div class="col-12">
             <input type="text" name="poznamka" class="form-control form-control-sm" placeholder="Poznámka (nepovinná)">
           </div>
-          <div class="col-12 d-flex gap-2">
-            <button type="submit" name="rozsah" value="cely" class="btn btn-outline-danger">Zrušit nepřítomnost</button>
+          <div class="col-12 d-flex flex-wrap gap-2">
+            {% if zadost.lze_zrusit_zbyvajici %}
+            <button type="submit" name="rozsah" value="zbyvajici" class="btn btn-outline-danger">Zrušit zbývající dny</button>
+            {% endif %}
+            <button type="submit" name="rozsah" value="cely" class="btn btn-outline-danger">{% if zadost.je_rozpracovana %}Zrušit celou žádost{% else %}Zrušit nepřítomnost{% endif %}</button>
             {% if zadost.lze_zrusit_jen_dnes and zadost.datum_od <= dnes and zadost.datum_do >= dnes %}
             <button type="submit" name="rozsah" value="dnes" class="btn btn-outline-danger">Zrušit jen dnešek</button>
             {% endif %}
           </div>
           <div class="col-12 text-muted small">
+            {% if zadost.je_skoncena %}Žádost už proběhla — zrušení bude zpětné. {% elif zadost.je_rozpracovana %}„Celá žádost“ zruší i už proběhlé dny. {% endif %}
             {% if zadost.typ.vyzaduje_schvaleni %}Zrušení musí schválit nadřízený.{% else %}Nepřítomnost se zruší okamžitě.{% endif %}
           </div>
         </form>
