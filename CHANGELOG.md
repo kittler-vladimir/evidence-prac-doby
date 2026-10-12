@@ -2,6 +2,10 @@
 
 Přehled změn, které uživatelé v aplikaci uvidí. Nejnovější nahoře; číslo v závorce odkazuje na issue na GitHubu.
 
+## 12. 10. 2026
+
+- Hodinová dovolená se už nezapočítá do přesčasu podruhé, když zaměstnanec v její době pracoval (#97)
+
 ## 9. 10. 2026
 
 - Nový zaměstnanec má hned zůstatek dovolené i indispozičního volna a při opětovné aktivaci se mu zůstatky obnoví na výchozí nárok (#95)
