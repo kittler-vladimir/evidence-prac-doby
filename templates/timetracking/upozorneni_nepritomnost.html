@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}Upozornění na nepřítomnost{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-md-8">
+    <div class="alert alert-warning">
+      <h5 class="alert-heading"><i class="bi bi-exclamation-triangle"></i> Máte zaznamenanou nepřítomnost</h5>
+      <p class="mb-0">Chcete zahájit pracovní blok, ale na dnešek máte:</p>
+    </div>
+
+    {% for z in konflikty %}
+    <div class="card shadow-sm mb-3">
+      <div class="card-body">
+        <div class="d-flex justify-content-between align-items-start mb-2">
+          <div>
+            <strong>{{ z.typ.nazev }}</strong> — {{ z.popis_rozsahu }}
+            <div class="text-muted small">{{ z.pocet_hodin }} h</div>
+          </div>
+          {% if z.stav == "ceka" %}
+            <span class="badge bg-warning text-dark">{{ z.get_stav_display }}</span>
+          {% else %}
+            <span class="badge bg-success">{{ z.get_stav_display }}</span>
+          {% endif %}
+        </div>
+
+        {% if z.ma_cekajici_zruseni %}
+          <p class="small text-muted mb-0">Žádost o zrušení už čeká na schválení.</p>
+        {% elif z.stav == "ceka" %}
+          <p class="small text-muted mb-2">Čekající žádost se po zrušení stornuje.</p>
+        {% elif z.typ.vyzaduje_schvaleni %}
+          <p class="small text-muted mb-2">Zrušení musí schválit {{ z.schvalovatele.jmeno|default:"nadřízený" }}.</p>
+        {% else %}
+          <p class="small text-muted mb-2">Nepřítomnost se zruší okamžitě.</p>
+        {% endif %}
+
+        {% if not z.ma_cekajici_zruseni %}
+        <form method="post" action="{% url 'timetracking:clock_in' %}" class="d-flex flex-wrap gap-2">
+          {% csrf_token %}
+          <input type="hidden" name="cas" value="{{ cas }}">
+          <input type="hidden" name="akce" value="zrusit">
+          <input type="hidden" name="zadost" value="{{ z.pk }}">
+          <button type="submit" name="rozsah" value="cely" class="btn btn-outline-danger btn-sm">Zrušit nepřítomnost a zahájit práci</button>
+          {% if z.lze_zrusit_jen_dnes and z.stav == "schvaleno" %}
+          <button type="submit" name="rozsah" value="dnes" class="btn btn-outline-danger btn-sm">Zrušit jen dnešek a zahájit práci</button>
+          {% endif %}
+        </form>
+        {% endif %}
+      </div>
+    </div>
+    {% endfor %}
+
+    <div class="d-flex gap-2">
+      <form method="post" action="{% url 'timetracking:clock_in' %}">
+        {% csrf_token %}
+        <input type="hidden" name="cas" value="{{ cas }}">
+        <input type="hidden" name="akce" value="prece">
+        <button type="submit" class="btn btn-success">Přesto zahájit práci</button>
+      </form>
+      <a href="{% url 'timetracking:dashboard' %}" class="btn btn-outline-secondary">Zpět</a>
+    </div>
+  </div>
+</div>
+{% endblock %}

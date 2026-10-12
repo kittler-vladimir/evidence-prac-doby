@@ -6,8 +6,8 @@ from django.shortcuts import render, redirect, get_object_or_404
 from django.http import HttpResponseForbidden
 from django.utils import timezone
 
-from .models import TypStavu, ZadostOStav, ZustatekStavu
-from .forms import SamoschvaleniForm, ZadostOStavForm, ZamitnutiForm
+from .models import TypStavu, ZadostOStav, ZadostOZruseni, ZustatekStavu
+from .forms import SamoschvaleniForm, ZadostOStavForm, ZamitnutiForm, ZruseniForm
 
 
 @login_required
@@ -77,10 +77,18 @@ def ke_schvaleni(request):
         typ__vyzaduje_schvaleni=True,
     ).select_related("employee__user", "typ")
 
+    zruseni = ZadostOZruseni.objects.filter(
+        stav=ZadostOZruseni.Stav.CEKA,
+    ).select_related("zadost__employee__user", "zadost__typ")
+
     if not request.user.is_staff:
         zadosti = zadosti.filter(schvalovatele=request.user.employee)
+        zruseni = zruseni.filter(schvalovatel=request.user.employee)
 
-    return render(request, "leaves/ke_schvaleni.html", {"zadosti": zadosti})
+    return render(request, "leaves/ke_schvaleni.html", {
+        "zadosti": zadosti,
+        "zruseni": zruseni,
+    })
 
 
 @login_required
@@ -115,12 +123,29 @@ def detail_zadosti(request, pk):
                 narok_hodin=zadost.typ.vychozi_narok(zadost.datum_od), cerpano_hodin=0,
             )
 
+    # Zrušení schválené žádosti (#100) — nabídka jen vlastníkovi, dokud žádost neskončila
+    # a (u typů se schvalováním) nečeká jiná žádost o zrušení.
+    cekajici_zruseni = zadost.cekajici_zruseni() if je_vlastni else None
+    muze_zrusit = bool(
+        je_vlastni
+        and zadost.stav == ZadostOStav.Stav.SCHVALENO
+        and zadost.datum_do >= timezone.localdate()
+        and not cekajici_zruseni
+    )
+    zruseni_samoschvaleni_form = None
+    if cekajici_zruseni and cekajici_zruseni.muze_schvalit_sam(employee):
+        zruseni_samoschvaleni_form = SamoschvaleniForm()
+
     return render(request, "leaves/detail_zadosti.html", {
         "zadost": zadost,
         "je_schvalovatel": je_schvalovatel,
         "zamitnutí_form": zamitnutí_form,
         "samoschvaleni_form": samoschvaleni_form,
         "zustatek": zustatek,
+        "muze_zrusit": muze_zrusit,
+        "cekajici_zruseni": cekajici_zruseni,
+        "zruseni_samoschvaleni_form": zruseni_samoschvaleni_form,
+        "dnes": timezone.localdate(),
     })
 
 
@@ -220,3 +245,114 @@ def stornovat(request, pk):
     zadost.save()
     messages.success(request, "Žádost byla stornována.")
     return redirect("leaves:moje_zadosti")
+
+
+def zprava_o_zruseni(vysledek):
+    """Zpráva po zrušení schválené žádosti (#100): `vysledek` je vytvořená žádost o zrušení
+    (typ se schvalováním), nebo None, když se žádost zrušila hned."""
+    if vysledek is None:
+        return "Nepřítomnost byla zrušena."
+    schvalovatel = vysledek.schvalovatel.jmeno if vysledek.schvalovatel else "administrátor"
+    return f"Žádost o zrušení byla odeslána ke schválení ({schvalovatel})."
+
+
+@login_required
+def zrusit(request, pk):
+    """Zaměstnanec ruší svou schválenou žádost — celou, nebo jen dnešek (#100). Typ bez
+    schvalování se zruší hned, typ se schvalováním jde jako žádost o zrušení."""
+    if request.method != "POST":
+        return redirect("leaves:detail_zadosti", pk=pk)
+
+    zadost = get_object_or_404(ZadostOStav, pk=pk, employee=getattr(request.user, "employee", None))
+    form = ZruseniForm(request.POST)
+    if not form.is_valid():
+        messages.error(request, "Neplatný rozsah zrušení.")
+        return redirect("leaves:detail_zadosti", pk=pk)
+
+    od = do = None
+    if form.cleaned_data["rozsah"] == "dnes":
+        if not zadost.lze_zrusit_jen_dnes:
+            messages.error(request, "Tuto žádost lze zrušit jen celou.")
+            return redirect("leaves:detail_zadosti", pk=pk)
+        od = do = timezone.localdate()
+
+    try:
+        vysledek = zadost.zrus_nepritomnost(od, do, poznamka=form.cleaned_data["poznamka"])
+    except ValidationError as e:
+        messages.error(request, "; ".join(e.messages))
+        return redirect("leaves:detail_zadosti", pk=pk)
+
+    messages.success(request, zprava_o_zruseni(vysledek))
+    return redirect("leaves:moje_zadosti")
+
+
+def _zruseni_ke_zpracovani(request, pk):
+    """Žádost o zrušení pro schvalovatele (nebo admina); None + redirect při neplatném stavu."""
+    zruseni = get_object_or_404(ZadostOZruseni, pk=pk)
+    employee = getattr(request.user, "employee", None)
+    if not request.user.is_staff and (employee is None or zruseni.schvalovatel != employee):
+        return None, HttpResponseForbidden()
+    if zruseni.stav != ZadostOZruseni.Stav.CEKA:
+        messages.warning(request, "Žádost o zrušení již byla vyřízena.")
+        return None, redirect("leaves:ke_schvaleni")
+    return zruseni, None
+
+
+@login_required
+def schvalit_zruseni(request, pk):
+    """Schválení žádosti o zrušení — provede zrušení na původní žádosti."""
+    if request.method != "POST":
+        return redirect("leaves:ke_schvaleni")
+    zruseni, odpoved = _zruseni_ke_zpracovani(request, pk)
+    if odpoved:
+        return odpoved
+    try:
+        zruseni.schval(getattr(request.user, "employee", None))
+    except ValidationError as e:
+        messages.error(request, "; ".join(e.messages))
+        return redirect("leaves:ke_schvaleni")
+    messages.success(request, f"Zrušení žádosti {zruseni.employee.jmeno} bylo schváleno.")
+    return redirect("leaves:ke_schvaleni")
+
+
+@login_required
+def zamitnout_zruseni(request, pk):
+    """Zamítnutí žádosti o zrušení — původní žádost zůstane schválená."""
+    if request.method != "POST":
+        return redirect("leaves:ke_schvaleni")
+    zruseni, odpoved = _zruseni_ke_zpracovani(request, pk)
+    if odpoved:
+        return odpoved
+    form = ZamitnutiForm(request.POST)
+    if form.is_valid():
+        zruseni.zamitni(
+            getattr(request.user, "employee", None), poznamka=form.cleaned_data["poznamka"],
+        )
+        messages.success(request, f"Zrušení žádosti {zruseni.employee.jmeno} bylo zamítnuto.")
+    return redirect("leaves:ke_schvaleni")
+
+
+@login_required
+def schvalit_zruseni_sam(request, pk):
+    """Schvalovatel ve výjimečném případě schválí zrušení vlastní žádosti (jako #90) —
+    povinný důvod."""
+    zruseni = get_object_or_404(ZadostOZruseni, pk=pk)
+    detail = redirect("leaves:detail_zadosti", pk=zruseni.zadost_id)
+    if request.method != "POST":
+        return detail
+
+    employee = getattr(request.user, "employee", None)
+    if not zruseni.muze_schvalit_sam(employee):
+        return HttpResponseForbidden()
+
+    form = SamoschvaleniForm(request.POST)
+    if not form.is_valid():
+        messages.error(request, "; ".join(form.errors["duvod"]))
+        return detail
+    try:
+        zruseni.schval(employee, samoschvaleno=True, duvod=form.cleaned_data["duvod"])
+    except ValidationError as e:
+        messages.error(request, "; ".join(e.messages))
+        return detail
+    messages.success(request, "Zrušení bylo schváleno vlastní osobou.")
+    return detail

@@ -8,7 +8,7 @@ from django.utils import timezone
 
 from accounts.models import Employee
 
-from .models import TypStavu, ZadostOStav, ZustatekStavu
+from .models import TypStavu, ZadostOStav, ZadostOZruseni, ZustatekStavu
 
 
 def _posli_email(subject: str, template: str, context: dict, recipients: list[str]):
@@ -88,6 +88,8 @@ def notifikace_zadost(sender, instance, created, **kwargs):
     - při zamítnutí → zaměstnanci
     """
     zadost = instance
+    if getattr(zadost, "_bez_notifikace", False):
+        return  # část rozdělené žádosti (ZadostOStav.zrus), ne nová žádost
 
     if created:
         # Notifikace schvalovateli
@@ -121,5 +123,44 @@ def notifikace_zadost(sender, instance, created, **kwargs):
             subject=f"Vaše žádost o {zadost.typ.nazev.lower()} byla zamítnuta",
             template="leaves/emails/zamitnuto.txt",
             context={"zadost": zadost},
+            recipients=[zadost.employee.email],
+        )
+
+
+@receiver(post_save, sender=ZadostOZruseni)
+def notifikace_zruseni(sender, instance, created, **kwargs):
+    """E-maily k žádosti o zrušení schválené žádosti (#100): nová → schvalovateli,
+    schválená/zamítnutá → zaměstnanci (zrušení schválené sám sobě e-mail nedává)."""
+    zruseni = instance
+    zadost = zruseni.zadost
+    kontext = {"zruseni": zruseni, "zadost": zadost}
+
+    if created:
+        if zruseni.schvalovatel and zruseni.schvalovatel.email:
+            _posli_email(
+                subject=f"Žádost o zrušení – {zadost.employee.jmeno}",
+                template="leaves/emails/zruseni_nove.txt",
+                context=kontext,
+                recipients=[zruseni.schvalovatel.email],
+            )
+        return
+
+    if not getattr(zruseni, "_stav_se_zmenil", True):
+        return
+
+    if zruseni.stav == ZadostOZruseni.Stav.SCHVALENO:
+        if zruseni.samoschvaleno:
+            return
+        _posli_email(
+            subject=f"Zrušení vaší žádosti o {zadost.typ.nazev.lower()} bylo schváleno",
+            template="leaves/emails/zruseni_schvaleno.txt",
+            context=kontext,
+            recipients=[zadost.employee.email],
+        )
+    elif zruseni.stav == ZadostOZruseni.Stav.ZAMITNUTO:
+        _posli_email(
+            subject=f"Zrušení vaší žádosti o {zadost.typ.nazev.lower()} bylo zamítnuto",
+            template="leaves/emails/zruseni_zamitnuto.txt",
+            context=kontext,
             recipients=[zadost.employee.email],
         )

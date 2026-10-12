@@ -12,4 +12,8 @@ urlpatterns = [
     path("<int:pk>/schvalit-sam/", views.schvalit_sam, name="schvalit_sam"),
     path("<int:pk>/zamitnou/", views.zamitnou, name="zamitnou"),
     path("<int:pk>/stornovat/", views.stornovat, name="stornovat"),
+    path("<int:pk>/zrusit/", views.zrusit, name="zrusit"),
+    path("zruseni/<int:pk>/schvalit/", views.schvalit_zruseni, name="schvalit_zruseni"),
+    path("zruseni/<int:pk>/schvalit-sam/", views.schvalit_zruseni_sam, name="schvalit_zruseni_sam"),
+    path("zruseni/<int:pk>/zamitnout/", views.zamitnout_zruseni, name="zamitnout_zruseni"),
 ]

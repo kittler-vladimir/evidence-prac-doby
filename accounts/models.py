@@ -637,6 +637,7 @@ class Employee(models.Model):
             or Sekce.objects.filter(vedouci=self).exists()
             or self.zastupovani_za.exists()
             or self.ke_schvaleni.filter(stav="ceka").exists()
+            or self.zruseni_ke_schvaleni.filter(stav="ceka").exists()
         )
 
     def get_schvalovatel(self):

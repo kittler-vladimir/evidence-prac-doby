@@ -4,6 +4,7 @@
 {% block content %}
 <h4 class="mb-3"><i class="bi bi-check2-circle"></i> Žádosti ke schválení</h4>
 
+{% if zadosti or not zruseni %}
 <div class="card shadow-sm">
   <div class="table-responsive">
     <table class="table table-hover mb-0">
@@ -36,4 +37,45 @@
     </table>
   </div>
 </div>
+{% endif %}
+
+{% if zruseni %}
+<h5 class="mt-4 mb-3"><i class="bi bi-x-circle"></i> Žádosti o zrušení</h5>
+<div class="card shadow-sm">
+  <div class="table-responsive">
+    <table class="table mb-0 align-middle">
+      <thead class="table-light">
+        <tr>
+          <th>Zaměstnanec</th>
+          <th>Typ</th>
+          <th>Rušit</th>
+          <th>Poznámka</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in zruseni %}
+        <tr>
+          <td>{{ r.zadost.employee.jmeno }}</td>
+          <td>{{ r.zadost.typ.zkratka }}</td>
+          <td>{{ r.popis_rozsahu }}</td>
+          <td>{{ r.poznamka_zamestnance|default:"—" }}</td>
+          <td class="text-end">
+            <form method="post" action="{% url 'leaves:schvalit_zruseni' r.pk %}" class="d-inline">
+              {% csrf_token %}
+              <button type="submit" class="btn btn-sm btn-success">Schválit zrušení</button>
+            </form>
+            <form method="post" action="{% url 'leaves:zamitnout_zruseni' r.pk %}" class="d-inline">
+              {% csrf_token %}
+              <input type="text" name="poznamka" class="form-control form-control-sm d-inline-block w-auto" placeholder="Důvod zamítnutí">
+              <button type="submit" class="btn btn-sm btn-danger">Zamítnout</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
 {% endblock %}

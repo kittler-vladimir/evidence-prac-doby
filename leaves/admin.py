@@ -7,6 +7,7 @@ from .models import (
     NarokDovolene,
     ZustatekStavu,
     ZadostOStav,
+    ZadostOZruseni,
 )
 
 
@@ -79,3 +80,18 @@ class ZadostOStavAdmin(admin.ModelAdmin):
             pocet += 1
         if pocet:
             self.message_user(request, _("Zamítnuto žádostí: %(pocet)s") % {"pocet": pocet})
+
+
+@admin.register(ZadostOZruseni)
+class ZadostOZruseniAdmin(admin.ModelAdmin):
+    list_display = ["zadost", "datum_od", "datum_do", "stav", "schvalovatel", "schvaleno_kym"]
+    list_filter = ["stav"]
+    search_fields = ["zadost__employee__user__last_name"]
+    # Vyřízení jde jen přes ZadostOZruseni.schval()/zamitni() (vrácení hodin do zůstatku).
+    readonly_fields = [
+        "zadost", "datum_od", "datum_do", "stav", "schvalovatel", "schvaleno_kym",
+        "schvaleno_kdy", "samoschvaleno", "vytvoreno",
+    ]
+
+    def has_add_permission(self, request):
+        return False  # vzniká jen z žádosti zaměstnance

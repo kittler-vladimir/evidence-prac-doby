@@ -91,6 +91,14 @@ class SamoschvaleniForm(forms.Form):
     )
 
 
+class ZruseniForm(forms.Form):
+    """Zrušení schválené žádosti (#100) — poznámka je nepovinná."""
+    rozsah = forms.ChoiceField(choices=[("cely", "Celá žádost"), ("dnes", "Jen dnešek")])
+    poznamka = forms.CharField(
+        label="Poznámka", widget=forms.Textarea(attrs={"rows": 2}), required=False,
+    )
+
+
 class ZamitnutiForm(forms.Form):
     poznamka = forms.CharField(
         label="Důvod zamítnutí",
