@@ -1,3 +1,4 @@
+from datetime import datetime, time, timedelta
 from decimal import Decimal
 
 from django.db import models
@@ -489,9 +490,18 @@ class ZadostOStav(models.Model):
                     )
 
     @classmethod
-    def hodinove_volno_minuty(cls, employee, datum):
+    def hodinove_volno_minuty(cls, employee, datum, useky_prace=(), useky_pohybu=()):
         """Minuty schválené hodinové žádosti zaměstnance v daný den (0, když žádná není) —
-        `WorkdaySummary.prepocitej()` je přičte k odpracované době (#82)."""
+        `WorkdaySummary.prepocitej()` je přičte k odpracované době (#82).
+
+        `useky_prace` jsou započítané úseky práce dne (aware `(od, do)`), `useky_pohybu`
+        z nich odečtené pohyby. Část dovolené, která leží v započítané práci, se vynechá —
+        ta už je v odpracované době a jinak by se započítala dvakrát (#97)."""
+        def prekryv_minut(od1, do1, od2, do2):
+            od, do = max(od1, od2), min(do1, do2)
+            return int((do - od).total_seconds() // 60) if do > od else 0
+
+        pulnoc = timezone.make_aware(datetime.combine(datum, time.min))
         zadosti = cls.objects.filter(
             employee=employee,
             stav=cls.Stav.SCHVALENO,
@@ -500,7 +510,19 @@ class ZadostOStav(models.Model):
             datum_od__lte=datum,
             datum_do__gte=datum,
         ).select_related("employee__typ_uvazku")
-        return sum(z.hodiny_po_dnech().get(datum, 0) for z in zadosti)
+        celkem = 0
+        for z in zadosti:
+            minuty = z.hodiny_po_dnech().get(datum, 0)
+            if not minuty:
+                continue
+            od_min, do_min = z.intervaly_po_dnech()[datum]
+            volno_od = pulnoc + timedelta(minutes=od_min)
+            volno_do = pulnoc + timedelta(minutes=do_min)
+            v_praci = sum(
+                prekryv_minut(volno_od, volno_do, od, do) for od, do in useky_prace
+            ) - sum(prekryv_minut(volno_od, volno_do, od, do) for od, do in useky_pohybu)
+            celkem += max(minuty - v_praci, 0)
+        return celkem
 
     def vypocitej_hodiny(self):
         """
