@@ -225,11 +225,11 @@ def _zrus_nepritomnost_pri_prichodu(request, employee, zacatek):
         zadost.stav = ZadostOStav.Stav.STORNOVÁNO
         zadost.save()
         return "Čekající žádost byla stornována."
-    od = do = None
-    if request.POST.get("rozsah") == "dnes":
-        if not zadost.lze_zrusit_jen_dnes:
-            raise ValidationError("Tuto žádost lze zrušit jen celou.")
-        od = do = timezone.localdate(zacatek)
+    if not zadost.lze_zrusit_pri_prichodu:
+        raise ValidationError(
+            "Rozpracovanou hodinovou žádost zrušte v jejím detailu (jde jen celá)."
+        )
+    od, do = zadost.rozsah_zruseni(request.POST.get("rozsah", "cely"))
     return zprava_o_zruseni(zadost.zrus_nepritomnost(od, do))
 
 

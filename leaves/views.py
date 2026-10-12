@@ -123,13 +123,12 @@ def detail_zadosti(request, pk):
                 narok_hodin=zadost.typ.vychozi_narok(zadost.datum_od), cerpano_hodin=0,
             )
 
-    # Zrušení schválené žádosti (#100) — nabídka jen vlastníkovi, dokud žádost neskončila
-    # a (u typů se schvalováním) nečeká jiná žádost o zrušení.
+    # Zrušení schválené žádosti (#100, #103) — nabídka jen vlastníkovi, i u už proběhlé
+    # žádosti, pokud nečeká jiná žádost o zrušení.
     cekajici_zruseni = zadost.cekajici_zruseni() if je_vlastni else None
     muze_zrusit = bool(
         je_vlastni
         and zadost.stav == ZadostOStav.Stav.SCHVALENO
-        and zadost.datum_do >= timezone.localdate()
         and not cekajici_zruseni
     )
     zruseni_samoschvaleni_form = None
@@ -269,14 +268,8 @@ def zrusit(request, pk):
         messages.error(request, "Neplatný rozsah zrušení.")
         return redirect("leaves:detail_zadosti", pk=pk)
 
-    od = do = None
-    if form.cleaned_data["rozsah"] == "dnes":
-        if not zadost.lze_zrusit_jen_dnes:
-            messages.error(request, "Tuto žádost lze zrušit jen celou.")
-            return redirect("leaves:detail_zadosti", pk=pk)
-        od = do = timezone.localdate()
-
     try:
+        od, do = zadost.rozsah_zruseni(form.cleaned_data["rozsah"])
         vysledek = zadost.zrus_nepritomnost(od, do, poznamka=form.cleaned_data["poznamka"])
     except ValidationError as e:
         messages.error(request, "; ".join(e.messages))

@@ -26,6 +26,8 @@
 
         {% if z.ma_cekajici_zruseni %}
           <p class="small text-muted mb-0">Žádost o zrušení už čeká na schválení.</p>
+        {% elif not z.lze_zrusit_pri_prichodu %}
+          <p class="small text-muted mb-0">Rozpracovanou hodinovou žádost lze zrušit jen celou v jejím detailu.</p>
         {% elif z.stav == "ceka" %}
           <p class="small text-muted mb-2">Čekající žádost se po zrušení stornuje.</p>
         {% elif z.typ.vyzaduje_schvaleni %}
@@ -34,13 +36,17 @@
           <p class="small text-muted mb-2">Nepřítomnost se zruší okamžitě.</p>
         {% endif %}
 
-        {% if not z.ma_cekajici_zruseni %}
+        {% if not z.ma_cekajici_zruseni and z.lze_zrusit_pri_prichodu %}
         <form method="post" action="{% url 'timetracking:clock_in' %}" class="d-flex flex-wrap gap-2">
           {% csrf_token %}
           <input type="hidden" name="cas" value="{{ cas }}">
           <input type="hidden" name="akce" value="zrusit">
           <input type="hidden" name="zadost" value="{{ z.pk }}">
+          {% if z.lze_zrusit_zbyvajici %}
+          <button type="submit" name="rozsah" value="zbyvajici" class="btn btn-outline-danger btn-sm">Zrušit zbývající dny a zahájit práci</button>
+          {% else %}
           <button type="submit" name="rozsah" value="cely" class="btn btn-outline-danger btn-sm">Zrušit nepřítomnost a zahájit práci</button>
+          {% endif %}
           {% if z.lze_zrusit_jen_dnes and z.stav == "schvaleno" %}
           <button type="submit" name="rozsah" value="dnes" class="btn btn-outline-danger btn-sm">Zrušit jen dnešek a zahájit práci</button>
           {% endif %}

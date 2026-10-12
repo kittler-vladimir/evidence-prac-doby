@@ -58,7 +58,7 @@
         <tr>
           <td>{{ r.zadost.employee.jmeno }}</td>
           <td>{{ r.zadost.typ.zkratka }}</td>
-          <td>{{ r.popis_rozsahu }}</td>
+          <td>{{ r.popis_rozsahu }}{% if r.je_zpetne %} <span class="badge bg-secondary">zpětně</span>{% endif %}</td>
           <td>{{ r.poznamka_zamestnance|default:"—" }}</td>
           <td class="text-end">
             <form method="post" action="{% url 'leaves:schvalit_zruseni' r.pk %}" class="d-inline">
