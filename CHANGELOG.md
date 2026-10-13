@@ -2,6 +2,10 @@
 
 Přehled změn, které uživatelé v aplikaci uvidí. Nejnovější nahoře; číslo v závorce odkazuje na issue na GitHubu.
 
+## 13. 10. 2026
+
+- Kontakt na kolegu najdete rovnou v denním přehledu přítomnosti, e-mail i telefon (#106)
+
 ## 12. 10. 2026
 
 - Schválenou dovolenou nebo jiné volno lze zrušit i zpětně, když už skončilo nebo právě probíhá (#103)
