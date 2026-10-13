@@ -172,6 +172,43 @@ class PrehledPritomnostiTestCase(TestCase):
         # badge s barvou dovolené se vykreslí 2× — v legendě a u řádku zaměstnance
         self.assertContains(response, f"background-color: {self.typ_dovolena.barva};", count=2)
 
+    def _nastav_kontakty(self):
+        self.zam_a.telefon = "+420 123 456 789"
+        self.zam_a.save()
+        # zam_b zůstává bez telefonu
+
+    def test_pritomnost_zobrazuje_email_a_telefon_jako_odkazy(self):
+        """Issue #106 — plochý přehled (non-staff) ukazuje mailto:/tel: odkazy, prázdný telefon jako pomlčku."""
+        self._nastav_kontakty()
+        self._prihlas(self.zam_a, "a@example.com")
+
+        response = self.client.get(reverse("reports:prehled_pritomnosti"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "<th>E-mail</th><th>Telefon</th>", count=2)  # 2 oddělení
+        self.assertContains(response, '<a href="mailto:a@example.com">a@example.com</a>', html=True)
+        self.assertContains(response, '<a href="tel:+420123456789">+420 123 456 789</a>', html=True)
+        self.assertContains(response, '<a href="mailto:b@example.com">b@example.com</a>', html=True)
+        self.assertContains(response, "<td>—</td>", count=1)
+        self.assertNotContains(response, 'href="tel:"')
+
+    def test_pritomnost_hierarchicke_zobrazeni_ma_stejne_sloupce(self):
+        self._nastav_kontakty()
+        admin = User.objects.create_user(
+            username="admin@example.com", email="admin@example.com", password="test12345", is_staff=True,
+        )
+        Employee.objects.create(
+            user=admin, osobni_cislo="9", oddeleni=self.oddeleni_a,
+            typ_uvazku=self.uvazek, datum_nastupu=date(2020, 1, 1),
+        )
+        self.assertTrue(self.client.login(username="admin@example.com", password="test12345"))
+
+        response = self.client.get(reverse("reports:prehled_pritomnosti"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "<th>E-mail</th><th>Telefon</th>", count=2)
+        self.assertContains(response, '<a href="tel:+420123456789">+420 123 456 789</a>', html=True)
+        self.assertContains(response, '<a href="mailto:b@example.com">b@example.com</a>', html=True)
+        self.assertNotContains(response, 'href="tel:"')
+
     def test_prehled_tymu_sdili_stejny_rozsah_jako_pritomnost(self):
         """Issue #28 — Odbor (prehled_tymu) musí ukazovat stejný okruh lidí jako
         Přítomnost (viditelni_zamestnanci), ne jen CRUD-spravované podřízené."""
