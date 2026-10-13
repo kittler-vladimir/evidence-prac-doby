@@ -178,7 +178,8 @@ class PrehledPritomnostiTestCase(TestCase):
         # zam_b zůstává bez telefonu
 
     def test_pritomnost_zobrazuje_email_a_telefon_jako_odkazy(self):
-        """Issue #106 — plochý přehled (non-staff) ukazuje mailto:/tel: odkazy, prázdný telefon jako pomlčku."""
+        """Issue #106 — plochý přehled (non-staff) ukazuje e-mail jako mailto: odkaz a telefon jako prostý
+        text (bez tel: odkazu), prázdný telefon jako pomlčku."""
         self._nastav_kontakty()
         self._prihlas(self.zam_a, "a@example.com")
 
@@ -186,10 +187,10 @@ class PrehledPritomnostiTestCase(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "<th>E-mail</th><th>Telefon</th>", count=2)  # 2 oddělení
         self.assertContains(response, '<a href="mailto:a@example.com">a@example.com</a>', html=True)
-        self.assertContains(response, '<a href="tel:+420123456789">+420 123 456 789</a>', html=True)
+        self.assertContains(response, "<td>+420 123 456 789</td>", html=True)
         self.assertContains(response, '<a href="mailto:b@example.com">b@example.com</a>', html=True)
         self.assertContains(response, "<td>—</td>", count=1)
-        self.assertNotContains(response, 'href="tel:"')
+        self.assertNotContains(response, "tel:")
 
     def test_pritomnost_hierarchicke_zobrazeni_ma_stejne_sloupce(self):
         self._nastav_kontakty()
@@ -205,9 +206,9 @@ class PrehledPritomnostiTestCase(TestCase):
         response = self.client.get(reverse("reports:prehled_pritomnosti"))
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "<th>E-mail</th><th>Telefon</th>", count=2)
-        self.assertContains(response, '<a href="tel:+420123456789">+420 123 456 789</a>', html=True)
+        self.assertContains(response, "<td>+420 123 456 789</td>", html=True)
         self.assertContains(response, '<a href="mailto:b@example.com">b@example.com</a>', html=True)
-        self.assertNotContains(response, 'href="tel:"')
+        self.assertNotContains(response, "tel:")
 
     def test_prehled_tymu_sdili_stejny_rozsah_jako_pritomnost(self):
         """Issue #28 — Odbor (prehled_tymu) musí ukazovat stejný okruh lidí jako
