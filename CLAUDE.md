@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 The project is runnable locally:
 - `manage.py`, `config/wsgi.py`, `config/asgi.py` exist.
-- `venv/` holds a local virtualenv with `requirements.txt` installed (Django 5.0.6). Activate it or call `venv/Scripts/python.exe` directly.
+- `venv/` holds a local virtualenv with `requirements.txt` installed (Django 5.2 LTS, currently Python 3.10 locally; CI runs the suite on Python 3.10 **and** 3.13, the production server is Debian 13 with Python 3.13 — keep the pins installable from wheels on both). Activate it or call `venv/Scripts/python.exe` directly.
 - `.env` exists (copied from `.env.example`) and is currently configured for **local dev with SQLite** (`DB_ENGINE=sqlite`) and console email — see below.
 - Migrations exist and are applied against `db.sqlite3`, which is kept around intentionally as dev seed data (an `is_staff` test account `test@example.com`, a test `Sekce`/`Odbor`/`Oddeleni`, real org data, leave requests, work sessions). Don't delete it without checking with the user first. `test@example.com` currently has no usable password (`set_unusable_password()`) — reset it via `manage.py changepassword` or Django admin before using it to log in.
 - All templates referenced by views exist under `templates/`.

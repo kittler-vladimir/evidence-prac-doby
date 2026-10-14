@@ -51,7 +51,7 @@ class EmployeeCreateForm(forms.Form):
             email=data["email"],
             first_name=data["first_name"],
             last_name=data["last_name"],
-            password=User.objects.make_random_password(),
+            password=None,  # nepoužitelné heslo; zatím ho nastavuje správce (viz TODO níže)
         )
         employee = Employee.objects.create(
             user=user,

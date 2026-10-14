@@ -1,7 +1,7 @@
 # Evidence pracovní doby — Django projekt
 
 ## Technologie
-- **Django 5.0** + PostgreSQL (lze spustit i proti SQLite pro lokální vývoj bez PostgreSQL serveru)
+- **Django 5.2 LTS** + PostgreSQL (lze spustit i proti SQLite pro lokální vývoj bez PostgreSQL serveru)
 - **Celery** + Redis (noční úlohy — označení zapomenutých odpíchnutí)
 - **Bootstrap 5** (server-rendered šablony)
 - **openpyxl** (export do Excelu) — `weasyprint` je v `requirements.txt`, ale zatím ho nepoužívá žádný kód (žádný PDF export zatím neexistuje)
