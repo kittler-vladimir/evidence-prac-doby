@@ -454,3 +454,53 @@ class CasovyBlokUvazkuValidaceTests(TestCase):
             self._data(**{"casove_bloky-0-pondeli": "on"}), instance=self.typ_pevny
         )
         self.assertTrue(formset.is_valid(), formset.errors)
+
+
+class PridatZamestnanceTests(TestCase):
+    """Issue #110 — zakládání zaměstnance (`make_random_password()` zmizelo z Djanga 5.1)."""
+
+    def setUp(self):
+        sekce = Sekce.objects.create(nazev="Sekce", kod="S1")
+        odbor = Odbor.objects.create(sekce=sekce, nazev="Odbor", kod="O1")
+        self.oddeleni = Oddeleni.objects.create(odbor=odbor, nazev="IT", kod="IT")
+        self.typ_uvazku = TypUvazku.objects.create(
+            nazev="Plný úvazek", hodiny_denne=8, hodiny_tyydne=40,
+        )
+        vedouci = _vytvor_zamestnance("vedouci@example.com", "V1", self.oddeleni, self.typ_uvazku)
+        vedouci.funkce = _funkce(Funkce.VEDOUCI_ODDELENI)
+        vedouci.save()
+
+        self.client = Client()
+        self.client.force_login(vedouci.user)
+        self.url = reverse("accounts:pridat_zamestnance")
+
+    def _data(self, **extra):
+        data = {
+            "first_name": "Nový",
+            "last_name": "Kolega",
+            "email": "novy.kolega@example.com",
+            "osobni_cislo": "N1",
+            "oddeleni": self.oddeleni.pk,
+            "typ_uvazku": self.typ_uvazku.pk,
+            "datum_nastupu": "2026-10-01",
+            "telefon": "+420 123 456 789",
+        }
+        data.update(extra)
+        return data
+
+    def test_platny_formular_zalozi_uzivatele_i_zamestnance(self):
+        response = self.client.post(self.url, self._data())
+        self.assertRedirects(response, reverse("accounts:seznam_zamestnancu"))
+
+        employee = Employee.objects.get(osobni_cislo="N1")
+        self.assertEqual(employee.oddeleni, self.oddeleni)
+        self.assertEqual(employee.telefon, "+420 123 456 789")
+        self.assertEqual(employee.user.email, "novy.kolega@example.com")
+        # Heslo se zatím nenastavuje — účet je bez použitelného hesla.
+        self.assertFalse(employee.user.has_usable_password())
+
+    def test_duplicitni_email_nezalozi_nic(self):
+        response = self.client.post(self.url, self._data(email="vedouci@example.com"))
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(Employee.objects.filter(osobni_cislo="N1").exists())
+        self.assertEqual(User.objects.filter(email="vedouci@example.com").count(), 1)
