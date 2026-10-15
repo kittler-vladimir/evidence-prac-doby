@@ -49,6 +49,9 @@ python manage.py runserver
 
 Ve vývoji server běží na portu **8010** (viz `.claude/launch.json`), ne na výchozím 8000.
 
+Produkční server (http://app.dochazka.mv.cz:8010/) a nasazení nové verze skriptem
+`./deploy.sh` popisuje [DEPLOY.md](DEPLOY.md).
+
 ### Ruční spuštění pro testery v síti
 
 Výchozí `runserver` poslouchá jen na `localhost`, takže se na něj z jiného počítače nikdo nedostane. Pro testování s dalšími lidmi:
