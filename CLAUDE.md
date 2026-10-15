@@ -21,7 +21,7 @@ Deployed since 14.–15. 10. 2026 to **http://app.dochazka.mv.cz:8010/** (SSH al
 - **Redeploy** = `./deploy.sh` (Git Bash on the dev machine): deploys `origin/main` only (refuses on a dirty tree or local `main` ≠ `origin/main`), pre-deploy `pg_dump`, `git archive` upload, pip (through the proxy `10.254.8.41:3128` — the server can't reach GitHub/PyPI directly), `migrate`, `collectstatic`, `check --deploy`, gunicorn reload, HTTP 200 check. `./deploy.sh --check` is read-only. Running it (without `--check`) changes production — only with the user's explicit OK.
 - The upload never deletes files on the server; the script lists files removed from git and aborts if any is a migration.
 - A health check on the server must send `Host: app.dochazka.mv.cz` (`ALLOWED_HOSTS`), otherwise Django answers 400.
-- `check --deploy` shows 4 expected HTTPS warnings (site is HTTP-only for now). `obnov_rocni_naroky` is **not** scheduled on the server yet.
+- `check --deploy` shows 4 expected HTTPS warnings (site is HTTP-only for now). `obnov_rocni_naroky` runs from the same cron file every 1 January at 03:00 (after the 02:30 backup; the command takes the year from UTC `timezone.now()`, so it must not run before 01:00 local time).
 
 ## Local dev database (SQLite vs PostgreSQL)
 
@@ -38,7 +38,7 @@ venv/Scripts/python.exe manage.py migrate
 venv/Scripts/python.exe manage.py createsuperuser
 venv/Scripts/python.exe manage.py generuj_svatky <rok> [--zeme CZ] [--prepsat]   # generate CZ public holidays for a year
 venv/Scripts/python.exe manage.py close_open_sessions [--hodiny 14]              # flag forgotten clock-outs
-venv/Scripts/python.exe manage.py obnov_rocni_naroky [--rok <rok>]               # roll vacation/IV balances into a new year (run via Celery Beat every 1 January)
+venv/Scripts/python.exe manage.py obnov_rocni_naroky [--rok <rok>]               # roll vacation/IV balances into a new year (on the server: cron every 1 January, see "Production deployment")
 venv/Scripts/python.exe manage.py runserver
 
 # Celery (separate terminals)

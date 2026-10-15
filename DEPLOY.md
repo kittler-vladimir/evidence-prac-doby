@@ -124,11 +124,14 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 0 2 * * *   evidence  cd /srv/evidence-prac-doby/app && PYTHONIOENCODING=utf-8 /srv/evidence-prac-doby/venv/bin/python manage.py close_open_sessions >> /var/log/evidence-prac-doby/close_open_sessions.log 2>&1
 # 02:30 - zaloha databaze, uchovat 14 dni
 30 2 * * *  evidence  pg_dump -Fc dochazka > /srv/evidence-prac-doby/backups/dochazka-$(date +\%Y\%m\%d).dump && find /srv/evidence-prac-doby/backups -name 'dochazka-*.dump' -mtime +14 -delete
+# 1. ledna 03:00 - zalozit zustatky dovolene/IV na novy rok (po nocni zaloze 02:30)
+0 3 1 1 *   evidence  cd /srv/evidence-prac-doby/app && PYTHONIOENCODING=utf-8 /srv/evidence-prac-doby/venv/bin/python manage.py obnov_rocni_naroky >> /var/log/evidence-prac-doby/obnov_rocni_naroky.log 2>&1
 ```
 
-**Chybí zatím:** `obnov_rocni_naroky` (převod zůstatků dovolené do nového roku, 1. ledna) na
-serveru naplánovaný není — do cronu ho je potřeba přidat do konce roku, nebo ho 1. 1. spustit
-ručně. Stejně tak svátky na další rok (`manage.py generuj_svatky <rok>`) se generují ručně.
+`obnov_rocni_naroky` (převod zůstatků dovolené a IV do nového roku) běží 1. ledna ve 3:00 —
+po noční záloze a bezpečně po půlnoci UTC, protože příkaz bere rok z `timezone.now().year`
+(UTC). Je idempotentní, ruční opakování nic nezdvojí. Svátky na další rok
+(`manage.py generuj_svatky <rok>`) se zatím generují ručně.
 
 ### Známá varování `check --deploy`
 
