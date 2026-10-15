@@ -14,6 +14,15 @@ The project is runnable locally:
 - **Automated tests exist** — run with `venv/Scripts/python.exe manage.py test`, covering `accounts`, `reports`, `leaves`, `timetracking`. A GitHub Actions workflow (`.github/workflows/tests.yml`) runs the same suite (sqlite, dummy env vars — no secrets needed) on every push to `main` and every PR.
 - **`CHANGELOG.md`** is the user-facing change log: Czech, newest first, grouped under a `## D. M. RRRR` date heading, one line per user-visible change written for users (no technical terms) and ending with its issue number `(#N)`. Whenever a PR with a user-visible change is merged, add the release-log line the user picked under that day's date (a follow-up commit if the line was only chosen after the merge). Internal-only changes (refactors, tests, tooling, docs) don't go in.
 
+## Production deployment
+
+Deployed since 14.–15. 10. 2026 to **http://app.dochazka.mv.cz:8010/** (SSH alias `dochazka-app`, Debian 13): nginx :8010 → gunicorn `evidence-prac-doby.service` (127.0.0.1:8001, user `evidence`) → local PostgreSQL 17 (DB `dochazka`, peer auth). Code in `/srv/evidence-prac-doby/app` (deployed commit in `REVISION`), venv `/srv/evidence-prac-doby/venv`, nightly `close_open_sessions` + `pg_dump` via `/etc/cron.d/evidence-prac-doby` (no Celery there). An old PHP attendance app runs in Apache on :80 on the same host — never touch Apache. Full layout, first install, backups and rollback: **`DEPLOY.md`**.
+
+- **Redeploy** = `./deploy.sh` (Git Bash on the dev machine): deploys `origin/main` only (refuses on a dirty tree or local `main` ≠ `origin/main`), pre-deploy `pg_dump`, `git archive` upload, pip (through the proxy `10.254.8.41:3128` — the server can't reach GitHub/PyPI directly), `migrate`, `collectstatic`, `check --deploy`, gunicorn reload, HTTP 200 check. `./deploy.sh --check` is read-only. Running it (without `--check`) changes production — only with the user's explicit OK.
+- The upload never deletes files on the server; the script lists files removed from git and aborts if any is a migration.
+- A health check on the server must send `Host: app.dochazka.mv.cz` (`ALLOWED_HOSTS`), otherwise Django answers 400.
+- `check --deploy` shows 4 expected HTTPS warnings (site is HTTP-only for now). `obnov_rocni_naroky` is **not** scheduled on the server yet.
+
 ## Local dev database (SQLite vs PostgreSQL)
 
 `config/settings.py` reads `DB_ENGINE` from `.env` (default `postgresql`, matching production). Set `DB_ENGINE=sqlite` to run against `BASE_DIR / "db.sqlite3"` without a PostgreSQL server — this is what `.env` currently has. Switch it back to `postgresql` (and fill in `DB_NAME`/`DB_USER`/`DB_PASSWORD`/`DB_HOST`/`DB_PORT`) when testing against real Postgres.
