@@ -25,7 +25,7 @@ Apache :80 — stará PHP aplikace (nesahat)
 | Kód | `/srv/evidence-prac-doby/app` (vlastník `evidence`), nasazený commit v `app/REVISION` |
 | Virtualenv | `/srv/evidence-prac-doby/venv` |
 | Konfigurace | `/srv/evidence-prac-doby/app/.env` (`root:evidence`, `640`) — obsahuje tajné hodnoty, nevypisovat |
-| Databáze | lokální PostgreSQL 17, DB `dochazka`, role `evidence` (vlastník DB), peer autentizace přes unix socket — v `.env` jsou `DB_HOST`, `DB_PORT` a `DB_PASSWORD` prázdné |
+| Databáze | lokální PostgreSQL 17, DB `dochazka`, role `evidence` (vlastník DB), peer autentizace přes unix socket — v `.env` jsou `DB_HOST`, `DB_PORT` a `DB_PASSWORD` prázdné; pro čtení zvenku role `dochazka_ro` přes SSH tunel (viz [Přístup k databázi jen pro čtení](#přístup-k-databázi-jen-pro-čtení-jdbc-dbeaver-)) |
 | Zálohy DB | `/srv/evidence-prac-doby/backups` (denní `pg_dump`, 14 dní) |
 | Logy | `/var/log/evidence-prac-doby/` (cron), `journalctl -u evidence-prac-doby` (gunicorn), `/var/log/nginx/evidence-prac-doby.*.log` |
 | Internet ze serveru | jen přes proxy `http://10.254.8.41:3128` (pip); GitHub není dostupný, kód se nahrává z vývojového počítače |
@@ -213,6 +213,48 @@ ssh dochazka-app
 sudo systemctl stop evidence-prac-doby
 sudo -u evidence pg_restore --clean --if-exists -d dochazka /srv/evidence-prac-doby/backups/<soubor>.dump
 sudo systemctl start evidence-prac-doby
+```
+
+## Přístup k databázi jen pro čtení (JDBC, DBeaver, …)
+
+Pro dotazy a reporty mimo aplikaci je role **`dochazka_ro`**: smí jen číst (SELECT na všechny
+tabulky a sekvence ve schématu `public`, i na tabulky z budoucích migrací),
+`default_transaction_read_only = on`, nejvýš 5 spojení. Aplikační role `evidence` heslo nemá
+a mít nemá. PostgreSQL poslouchá jen na `localhost`, takže se připojuje přes SSH tunel — do sítě
+databáze otevřená není.
+
+Heslo si nastaví ten, kdo přístup potřebuje (interaktivně, nikam se nezapíše):
+
+```bash
+ssh -t dochazka-app "sudo -u postgres psql -c '\password dochazka_ro'"
+```
+
+Tunel (nechat běžet) a JDBC:
+
+```bash
+ssh -N -L 5433:localhost:5432 dochazka-app
+```
+
+```
+URL:     jdbc:postgresql://localhost:5433/dochazka
+Driver:  org.postgresql.Driver
+User:    dochazka_ro
+```
+
+DBeaver/DataGrip umí tunel samy: záložka SSH — host `app.dochazka.mv.cz`, uživatel `kittler`,
+klíč `id_rsa_afrodite`; hlavní záložka — `localhost:5432`, DB `dochazka`, uživatel `dochazka_ro`.
+
+Založení role při nové instalaci (jako `postgres`, v DB `dochazka`, po prvním `migrate`):
+
+```sql
+CREATE ROLE dochazka_ro LOGIN CONNECTION LIMIT 5;
+ALTER ROLE dochazka_ro SET default_transaction_read_only = on;
+GRANT CONNECT ON DATABASE dochazka TO dochazka_ro;
+GRANT USAGE ON SCHEMA public TO dochazka_ro;
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO dochazka_ro;
+GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO dochazka_ro;
+ALTER DEFAULT PRIVILEGES FOR ROLE evidence IN SCHEMA public GRANT SELECT ON TABLES TO dochazka_ro;
+ALTER DEFAULT PRIVILEGES FOR ROLE evidence IN SCHEMA public GRANT SELECT ON SEQUENCES TO dochazka_ro;
 ```
 
 ## První instalace od nuly
