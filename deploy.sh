@@ -21,6 +21,9 @@ BACKUPS=$ROOT/backups
 SERVICE=evidence-prac-doby
 APP_USER=evidence
 DB_NAME=dochazka
+# Databáze je na db-main-ctx (PostgreSQL 18); heslo role evidence je v $ROOT/.pgpass.
+DB_HOST=db-main-ctx.mv.cz
+DB_USER=evidence
 PROXY=http://10.254.8.41:3128
 HEALTH_URL=http://127.0.0.1:8010/prihlaseni/
 HEALTH_HOST=app.dochazka.mv.cz
@@ -87,6 +90,7 @@ info "Kontrola serveru $SSH_HOST"
     sudo -n true || { echo 'sudo -n nefunguje' >&2; exit 1; }
     for d in $APP $VENV $BACKUPS; do [ -d \"\$d\" ] || { echo \"chybí \$d\" >&2; exit 1; }; done
     sudo -n test -f $APP/.env || { echo 'chybí $APP/.env' >&2; exit 1; }
+    sudo -n test -f $ROOT/.pgpass || { echo 'chybí $ROOT/.pgpass (heslo k databázi)' >&2; exit 1; }
     systemctl is-active --quiet $SERVICE || { echo 'služba $SERVICE neběží' >&2; exit 1; }" \
     || die "server neodpovídá očekávanému stavu (viz výše)"
 
@@ -139,7 +143,7 @@ trap 'warn "nasazení selhalo — kód na serveru může být jen zčásti aktua
 stamp=$(date +%Y%m%d-%H%M%S)
 backup="$BACKUPS/dochazka-predeploy-$stamp-$SHORT.dump"
 info "Záloha databáze → $backup"
-"${SSH[@]}" "sudo -n -u $APP_USER sh -c 'cd $BACKUPS && pg_dump -Fc $DB_NAME > $backup || { rm -f $backup; exit 1; }'"
+"${SSH[@]}" "sudo -n -u $APP_USER -H sh -c 'cd $BACKUPS && pg_dump -h $DB_HOST -U $DB_USER -w -Fc $DB_NAME > $backup || { rm -f $backup; exit 1; }'"
 
 info "Nahrání $SHORT (git archive → tar)"
 # core.autocrlf=false: na server jdou soubory s LF, ne s CRLF z Windows checkoutu.
