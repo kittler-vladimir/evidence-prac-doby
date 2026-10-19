@@ -12,10 +12,13 @@ se vrátit ke starší verzi a jak server postavit znovu od nuly.
 ```
 prohlížeč ──► nginx :8010 ──► /static/  → /srv/evidence-prac-doby/app/staticfiles/
                          └──► gunicorn 127.0.0.1:8001 (3 workery, uživatel evidence)
-                                         └──► PostgreSQL 17 (lokálně, unix socket, peer auth)
+                                         └──► PostgreSQL 18 na db-main-ctx.mv.cz:5432 (TLS, heslo z .pgpass)
 
 Apache :80 — stará PHP aplikace (nesahat)
 ```
+
+Databáze je od 19. 10. 2026 na samostatném serveru `db-main-ctx.mv.cz` (předtím lokální
+PostgreSQL 17 na aplikačním serveru — viz [Původní lokální databáze](#původní-lokální-databáze)).
 
 | Co | Hodnota |
 |---|---|
@@ -25,8 +28,9 @@ Apache :80 — stará PHP aplikace (nesahat)
 | Kód | `/srv/evidence-prac-doby/app` (vlastník `evidence`), nasazený commit v `app/REVISION` |
 | Virtualenv | `/srv/evidence-prac-doby/venv` |
 | Konfigurace | `/srv/evidence-prac-doby/app/.env` (`root:evidence`, `640`) — obsahuje tajné hodnoty, nevypisovat |
-| Databáze | lokální PostgreSQL 17, DB `dochazka`, role `evidence` (vlastník DB), peer autentizace přes unix socket — v `.env` jsou `DB_HOST`, `DB_PORT` a `DB_PASSWORD` prázdné; pro čtení zvenku role `dochazka_ro` přes SSH tunel (viz [Přístup k databázi jen pro čtení](#přístup-k-databázi-jen-pro-čtení-jdbc-dbeaver-)) |
-| Zálohy DB | `/srv/evidence-prac-doby/backups` (denní `pg_dump`, 14 dní) |
+| Databáze | PostgreSQL 18 na `db-main-ctx.mv.cz:5432` (10.74.34.173), DB `dochazka`, role `evidence` (vlastník DB, bez superuser). Heslo role `evidence` je jen v `/srv/evidence-prac-doby/.pgpass` (`evidence:evidence`, `600`) — čte ho aplikace, cron i `deploy.sh`; `DB_PASSWORD` v `.env` je prázdné. Pro čtení zvenku role `dochazka_ro` (viz [Přístup k databázi jen pro čtení](#přístup-k-databázi-jen-pro-čtení-jdbc-dbeaver-)) |
+| Klient PostgreSQL | `postgresql-client-18` z repozitáře PGDG (`/etc/apt/sources.list.d/pgdg.sources`, pin 100 v `/etc/apt/preferences.d/pgdg.pref`, takže z PGDG jde jen to, co se výslovně vyžádá — dnes `postgresql-client-18` a `libpq5`). `pg_dump` 17 z Debianu zálohu ze serveru 18 odmítne; `pg_dump -h …` přes `pg_wrapper` použije automaticky nejnovější klient |
+| Zálohy DB | `/srv/evidence-prac-doby/backups` (denní `pg_dump` z `db-main-ctx`, 14 dní) |
 | Logy | `/var/log/evidence-prac-doby/` (cron), `journalctl -u evidence-prac-doby` (gunicorn), `/var/log/nginx/evidence-prac-doby.*.log` |
 | Internet ze serveru | jen přes proxy `http://10.254.8.41:3128` (pip); GitHub není dostupný, kód se nahrává z vývojového počítače |
 
@@ -44,9 +48,9 @@ Host dochazka-app
 Klíče jako v `.env.example`. Neveřejné hodnoty pro orientaci:
 
 - `DEBUG=False`, `ALLOWED_HOSTS=app.dochazka.mv.cz,localhost` (`localhost` kvůli kontrolám přímo na serveru)
-- `DB_ENGINE=postgresql`, `DB_NAME=dochazka`, `DB_USER=evidence`, `DB_HOST=`, `DB_PORT=`, `DB_PASSWORD=`
+- `DB_ENGINE=postgresql`, `DB_NAME=dochazka`, `DB_USER=evidence`, `DB_HOST=db-main-ctx.mv.cz`, `DB_PORT=5432`, `DB_PASSWORD=` (prázdné — Django pak heslo nepředá a libpq ho vezme z `~evidence/.pgpass`; systemd i cron nastavují `HOME=/srv/evidence-prac-doby`)
 - `EMAIL_BACKEND=django.core.mail.backends.console.EmailBackend` — testovací fáze, e-maily jdou jen do logu gunicornu. Před ostrým provozem přepnout na SMTP a nastavit skutečný `DEFAULT_FROM_EMAIL`.
-- V `.env` jsou zakomentované řádky pro `db-main-ctx.mv.cz` (PostgreSQL 13) — na tu se přejde, až bude povýšená.
+- V `.env` zůstaly zakomentované staré řádky pro `db-main-ctx.mv.cz` z doby PostgreSQL 13 (role `kittler`) — neplatí, aplikace používá roli `evidence`.
 - `CELERY_*` musí být vyplněné (čte je `config/settings.py`), ale Celery na serveru neběží.
 
 Před každou ruční úpravou udělat zálohu (`sudo cp -p .env .env.bak-$(date +%Y%m%d-%H%M%S)`).
@@ -122,8 +126,8 @@ SHELL=/bin/sh
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 # 02:00 - oznacit zapomenute odchody/pohyby
 0 2 * * *   evidence  cd /srv/evidence-prac-doby/app && PYTHONIOENCODING=utf-8 /srv/evidence-prac-doby/venv/bin/python manage.py close_open_sessions >> /var/log/evidence-prac-doby/close_open_sessions.log 2>&1
-# 02:30 - zaloha databaze, uchovat 14 dni
-30 2 * * *  evidence  pg_dump -Fc dochazka > /srv/evidence-prac-doby/backups/dochazka-$(date +\%Y\%m\%d).dump && find /srv/evidence-prac-doby/backups -name 'dochazka-*.dump' -mtime +14 -delete
+# 02:30 - zaloha databaze (db-main-ctx.mv.cz, heslo z ~evidence/.pgpass), uchovat 14 dni
+30 2 * * *  evidence  pg_dump -h db-main-ctx.mv.cz -U evidence -w -Fc dochazka > /srv/evidence-prac-doby/backups/dochazka-$(date +\%Y\%m\%d).dump && find /srv/evidence-prac-doby/backups -name 'dochazka-*.dump' -mtime +14 -delete
 # 1. ledna 03:00 - zalozit zustatky dovolene/IV na novy rok (po nocni zaloze 02:30)
 0 3 1 1 *   evidence  cd /srv/evidence-prac-doby/app && PYTHONIOENCODING=utf-8 /srv/evidence-prac-doby/venv/bin/python manage.py obnov_rocni_naroky >> /var/log/evidence-prac-doby/obnov_rocni_naroky.log 2>&1
 ```
@@ -156,8 +160,8 @@ Skript se zastaví na první chybě. Postupně:
    `main` liší od `origin/main` (po `git fetch`).
 2. Na serveru ověří `sudo`, adresáře, `.env` a běžící službu; vypíše nasazenou revizi a commity,
    které přibudou; zkontroluje soubory smazané z gitu (viz níže).
-3. Udělá zálohu databáze `backups/dochazka-predeploy-<datum>-<commit>.dump` (smaže ji cron po
-   14 dnech jako ostatní zálohy).
+3. Udělá zálohu databáze z `db-main-ctx` do `backups/dochazka-predeploy-<datum>-<commit>.dump`
+   (smaže ji cron po 14 dnech jako ostatní zálohy).
 4. Nahraje `origin/main` přes `git archive` (bez `.claude/`, s konci řádků LF) a rozbalí ho přes
    stávající kód; zapíše `REVISION` a vlastníka `evidence` (jen u nahraných souborů — `.env`
    zůstane `root:evidence`).
@@ -206,45 +210,64 @@ ne**:
 ## Zálohy a obnova databáze
 
 Denní záloha ve 2:30 a záloha před každým nasazením jsou v `/srv/evidence-prac-doby/backups`
-(`pg_dump -Fc`, čitelné jen pro `evidence`). Obnova (přepíše data v DB `dochazka`):
+(`pg_dump -Fc` z `db-main-ctx`, čitelné jen pro `evidence`). Obnova (přepíše data v DB
+`dochazka` na `db-main-ctx`, v jedné transakci — při chybě se nezmění nic):
 
 ```bash
 ssh dochazka-app
 sudo systemctl stop evidence-prac-doby
-sudo -u evidence pg_restore --clean --if-exists -d dochazka /srv/evidence-prac-doby/backups/<soubor>.dump
+sudo -u evidence -H pg_restore --clean --if-exists --no-owner --no-acl --single-transaction --exit-on-error \
+    -h db-main-ctx.mv.cz -U evidence -d dochazka /srv/evidence-prac-doby/backups/<soubor>.dump
 sudo systemctl start evidence-prac-doby
 ```
+
+`--no-acl` vynechá práva, takže po obnově je potřeba znovu dát `dochazka_ro` čtení na tabulky
+(`GRANT USAGE …` a dva `GRANT SELECT …` z kapitoly níže, jako `evidence`). Výchozí práva
+(`ALTER DEFAULT PRIVILEGES`) obnova nesmaže.
+
+### Původní lokální databáze
+
+Do 19. 10. 2026 běžela databáze lokálně na aplikačním serveru (PostgreSQL 17, peer autentizace).
+Přesun: zastavení gunicornu, `pg_dump` lokální DB (`backups/dochazka-premigrace-20261019-090340.dump`),
+obnova na `db-main-ctx` jako výše, porovnání počtu řádků všech tabulek a sekvencí, změna
+`DB_HOST`/`DB_PORT` v `.env` (záloha `.env.bak-20261019-090444`), start. Lokální cluster 17
+běží dál jako záloha, DB `dochazka` v něm je nastavená jen pro čtení
+(`ALTER DATABASE dochazka SET default_transaction_read_only = on`); až nebude potřeba, lze ho
+zrušit (pak i `After=`/`Wants=postgresql.service` v systemd unitu).
+
+Návrat na lokální DB (data zapsaná mezitím do `db-main-ctx` je potřeba přenést zpět zálohou):
+vypnout read-only (`ALTER DATABASE dochazka RESET default_transaction_read_only` jako `postgres`),
+vrátit `.env` ze zálohy a `systemctl restart evidence-prac-doby`.
 
 ## Přístup k databázi jen pro čtení (JDBC, DBeaver, …)
 
 Pro dotazy a reporty mimo aplikaci je role **`dochazka_ro`**: smí jen číst (SELECT na všechny
 tabulky a sekvence ve schématu `public`, i na tabulky z budoucích migrací),
-`default_transaction_read_only = on`, nejvýš 5 spojení. Aplikační role `evidence` heslo nemá
-a mít nemá. PostgreSQL poslouchá jen na `localhost`, takže se připojuje přes SSH tunel — do sítě
-databáze otevřená není.
+`default_transaction_read_only = on`, nejvýš 5 spojení. Ve schématu `public` nesmí nic
+vytvářet (schéma patří `pg_database_owner`, `PUBLIC` má jen `USAGE`), takže ani vypnutí
+read-only v sezení jí nedovolí nic založit. `CONNECT` do DB `dochazka` mají jen `evidence` a
+`dochazka_ro` (`PUBLIC` ho nemá).
 
-Heslo si nastaví ten, kdo přístup potřebuje (interaktivně, nikam se nezapíše):
-
-```bash
-ssh -t dochazka-app "sudo -u postgres psql -c '\password dochazka_ro'"
-```
-
-Tunel (nechat běžet) a JDBC:
+Heslo si nastaví ten, kdo přístup potřebuje (interaktivně, `\password` posílá jen hash), přes
+účet s právy na `db-main-ctx` (např. `kittler`):
 
 ```bash
-ssh -N -L 5433:localhost:5432 dochazka-app
+ssh -t dochazka-app "psql -h db-main-ctx.mv.cz -U kittler -d dochazka -c '\password dochazka_ro'"
 ```
 
+Připojení přímo (`pg_hba.conf` na `db-main-ctx` dnes pouští spojení z celé sítě):
+
 ```
-URL:     jdbc:postgresql://localhost:5433/dochazka
+URL:     jdbc:postgresql://db-main-ctx.mv.cz:5432/dochazka
 Driver:  org.postgresql.Driver
 User:    dochazka_ro
 ```
 
-DBeaver/DataGrip umí tunel samy: záložka SSH — host `app.dochazka.mv.cz`, uživatel `kittler`,
-klíč `id_rsa_afrodite`; hlavní záložka — `localhost:5432`, DB `dochazka`, uživatel `dochazka_ro`.
+Když přímé spojení z PC nejde (síť, firewall), tunel přes aplikační server:
+`ssh -N -L 5433:db-main-ctx.mv.cz:5432 dochazka-app` a pak `jdbc:postgresql://localhost:5433/dochazka`.
 
-Založení role při nové instalaci (jako `postgres`, v DB `dochazka`, po prvním `migrate`):
+Založení role při nové instalaci (jako `kittler` na `db-main-ctx`, v DB `dochazka`, po prvním
+`migrate`):
 
 ```sql
 CREATE ROLE dochazka_ro LOGIN CONNECTION LIMIT 5;
@@ -263,7 +286,9 @@ Postup odpovídající tomu, jak je server zařízený (sestavený zpětně z je
 jako `kittler` se `sudo`; proxy je potřeba pro `apt`/`pip`, pokud na serveru není nastavená
 globálně.
 
-1. Balíčky: `python3`, `python3-venv`, `nginx`, `postgresql` (17), `curl`. Apache nechat být.
+1. Balíčky: `python3`, `python3-venv`, `nginx`, `curl` a klient PostgreSQL ve verzi serveru
+   databáze (dnes `postgresql-client-18` z PGDG — zdroj a pin viz tabulka v Přehledu;
+   `apt-get install --no-install-recommends postgresql-client-18 libpq5/trixie-pgdg`). Apache nechat být.
 2. Uživatel a adresáře:
    ```bash
    sudo adduser --system --group --home /srv/evidence-prac-doby --shell /usr/sbin/nologin evidence
@@ -272,11 +297,22 @@ globálně.
    sudo install -d -o evidence -g evidence -m 750 /var/log/evidence-prac-doby
    sudo -u evidence python3 -m venv /srv/evidence-prac-doby/venv
    ```
-3. Databáze (peer autentizace — systémový uživatel `evidence` = role `evidence`, bez hesla):
-   ```bash
-   sudo -u postgres createuser evidence
-   sudo -u postgres createdb -O evidence dochazka
+3. Databáze na `db-main-ctx` (jako `kittler`, DB `dochazka` už existuje):
+   ```sql
+   CREATE ROLE evidence LOGIN;
+   ALTER DATABASE dochazka OWNER TO evidence;
+   REVOKE CONNECT ON DATABASE dochazka FROM PUBLIC;
+   ALTER SCHEMA public OWNER TO pg_database_owner;  -- DB převzatá ze starší verze měla vlastníka postgres
+   REVOKE CREATE ON SCHEMA public FROM PUBLIC;
    ```
+   Heslo nastaví člověk (`\password evidence`) a sám ho zapíše do `.pgpass` uživatele `evidence`
+   (jeden řádek `db-main-ctx.mv.cz:5432:dochazka:evidence:<heslo>`, `:` a `\` v hesle jako `\:`
+   a `\\`):
+   ```bash
+   ssh -t dochazka-app 'sudo -u evidence sh -c "umask 077; nano /srv/evidence-prac-doby/.pgpass"'
+   ```
+   Pokud PostgreSQL hlásí *collation version mismatch* (DB vytvořená před upgradem systému),
+   u prázdné DB stačí `ALTER DATABASE dochazka REFRESH COLLATION VERSION`.
 4. Kód: z vývojového počítače
    ```bash
    git -c core.autocrlf=false archive --format=tar origin/main -- . ':(exclude).claude' | ssh dochazka-app 'sudo -n tar -x -C /srv/evidence-prac-doby/app'
