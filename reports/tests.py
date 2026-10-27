@@ -445,9 +445,9 @@ class NepritomnostiOdborAExportTestCase(TestCase):
             ["Datum", "Den", "Odpracováno", "Přesčas", "Nedostatek", "Svátek/Víkend", "Bilance", "Nepřítomnost"],
         )
         podle_data = {r[0].value: r[7].value for r in ws.iter_rows(min_row=2) if r[0].value}
-        self.assertEqual(podle_data["12.10.2026"], "DOV")
-        self.assertEqual(podle_data["14.10.2026"], "HOT (přítomnost)")
-        self.assertEqual(podle_data["15.10.2026"], "NEM")
+        self.assertEqual(podle_data["12.10.2026"], "DOV 8h 0min")
+        self.assertEqual(podle_data["14.10.2026"], "HOT 8h 0min (přítomnost)")
+        self.assertEqual(podle_data["15.10.2026"], "NEM 8h 0min")
         self.assertEqual(podle_data["16.10.2026"], "DOV 2h 30min")
         self.assertIsNone(podle_data["19.10.2026"])  # čekající žádost
 
