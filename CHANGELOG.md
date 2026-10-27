@@ -2,6 +2,10 @@
 
 Přehled změn, které uživatelé v aplikaci uvidí. Nejnovější nahoře; číslo v závorce odkazuje na issue na GitHubu.
 
+## 27. 10. 2026
+
+- Ve výkazu, v přehledu odboru i v exportu do Excelu teď vidíte dovolenou, nemoc a další nepřítomnosti (#117)
+
 ## 13. 10. 2026
 
 - Kontakt na kolegu najdete rovnou v denním přehledu přítomnosti, e-mail i telefon (#106)

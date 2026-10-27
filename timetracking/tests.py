@@ -749,7 +749,7 @@ class PrehledMesiceViewTests(TestCase):
         bunky = re.findall(r"<td>(.*?)</td>", radek.group(1), re.S)
         self.assertEqual(
             [b.strip() for b in bunky],
-            ["22h 45min", "0h 45min", "2h 0min", "Bilance: −1h 15min"],  # 525+390+0+450 min odpracováno
+            ["22h 45min", "0h 45min", "2h 0min", "Bilance: −1h 15min", ""],  # 525+390+0+450 min odpracováno; poslední = sloupec Nepřítomnost
         )
         self.assertNotIn("-1h 15min", obsah)  # skutečné znaménko "−", ne pomlčka
 
@@ -1835,3 +1835,186 @@ class VyberMesiceVykazTests(TestCase):
         self.assertEqual(
             odpoved.context["obdobi"].rozsah_pro_skript["prvni"], [2026, 9],
         )
+
+
+def vytvor_nepritomnosti_rijna_2026(employee):
+    """Společná data testů #117 (Výkaz, Odbor, XLSX): dovolená Po–Út 12.–13. 10., home office
+    St 14. 10., nemoc Čt 15. 10. (celé dny, bez WorkdaySummary), hodinová dovolená Pá 16. 10.
+    9:00–11:30 a čekající dovolená Po 19. 10. Navíc nepoužitý aktivní typ OČR.
+    Vrací `{"dovolena", "nemoc", "home_office", "ocr"}` (TypStavu)."""
+    from leaves.models import TypStavu, ZadostOStav
+
+    dovolena = TypStavu.objects.create(
+        nazev="Dovolená", zkratka="DOV", je_dovolena=True, odecita_ze_zustatku=True,
+        umoznuje_zadani_po_hodinach=True, barva="#2E8B57",
+    )
+    nemoc = TypStavu.objects.create(
+        nazev="Nemoc", zkratka="NEM", vyzaduje_schvaleni=False, odecita_ze_zustatku=False,
+    )
+    home_office = TypStavu.objects.create(
+        nazev="Home office test", zkratka="HOT", vyzaduje_schvaleni=False,
+        odecita_ze_zustatku=False, je_pritomnost=True,
+    )
+    ocr = TypStavu.objects.create(
+        nazev="Ošetřování člena rodiny", zkratka="OČR", vyzaduje_schvaleni=False,
+        odecita_ze_zustatku=False,
+    )
+
+    def zadost(typ, od, do, **kwargs):
+        kwargs.setdefault("stav", ZadostOStav.Stav.SCHVALENO)
+        return ZadostOStav.objects.create(
+            employee=employee, typ=typ, datum_od=od, datum_do=do, **kwargs,
+        )
+
+    zadost(dovolena, date(2026, 10, 12), date(2026, 10, 13))
+    zadost(home_office, date(2026, 10, 14), date(2026, 10, 14))
+    zadost(nemoc, date(2026, 10, 15), date(2026, 10, 15))
+    zadost(dovolena, date(2026, 10, 16), date(2026, 10, 16), cas_od=time(9, 0), cas_do=time(11, 30))
+    zadost(dovolena, date(2026, 10, 19), date(2026, 10, 19), stav=ZadostOStav.Stav.CEKA)
+    # Dovolená v jiném měsíci se do října nepočítá.
+    zadost(dovolena, date(2026, 11, 2), date(2026, 11, 2))
+    # Zamítnutá a stornovaná se nikdy nezobrazují.
+    zadost(dovolena, date(2026, 10, 20), date(2026, 10, 20), stav=ZadostOStav.Stav.ZAMITNUTO)
+    zadost(dovolena, date(2026, 10, 21), date(2026, 10, 21), stav=ZadostOStav.Stav.STORNOVÁNO)
+    # Den s hodinovou dovolenou má i docházku (vytvořeno až po žádosti, aby signál
+    # nepřepsal ručně zadaný souhrn): 5 h práce + 2 h 30 min dovolené − 8 h normy.
+    WorkdaySummary.objects.create(
+        employee=employee, datum=date(2026, 10, 16),
+        hrube_minuty=300, odpracovane_minuty=300, prescos_minuty=-30,
+    )
+    return {"dovolena": dovolena, "nemoc": nemoc, "home_office": home_office, "ocr": ocr}
+
+
+class NepritomnostiVeVykazuTests(TestCase):
+    """Issue #117 — měsíční Výkaz vypisuje všechny druhy nepřítomnosti."""
+
+    def setUp(self):
+        self.employee = vytvor_zamestnance()
+        self.typy = vytvor_nepritomnosti_rijna_2026(self.employee)
+        self.client = Client()
+        self.client.force_login(self.employee.user)
+        self.url = reverse("timetracking:prehled_mesice")
+
+    def _radky(self, response):
+        return {r.datum: r for t in response.context["tydny"] for r in t.souhrny}
+
+    def test_dny_bez_dochazky_maji_vlastni_radek_s_typem(self):
+        response = self.client.get(self.url, {"rok": 2026, "mesic": 10})
+        self.assertEqual(response.status_code, 200)
+        radky = self._radky(response)
+
+        self.assertEqual(sorted(radky), [date(2026, 10, d) for d in (12, 13, 14, 15, 16)])
+        for den, zkratka in ((12, "DOV"), (13, "DOV"), (14, "HOT"), (15, "NEM")):
+            radek = radky[date(2026, 10, den)]
+            self.assertEqual(radek.odpracovane_minuty, 0)
+            self.assertEqual([n.typ.zkratka for n in radek.nepritomnosti], [zkratka])
+        # Čekající (19.), zamítnutá (20.) a stornovaná (21.) žádost řádek nevytvoří.
+        for den in (19, 20, 21):
+            self.assertNotIn(date(2026, 10, den), radky)
+
+    def test_hodinova_dovolena_u_dne_s_dochazkou(self):
+        radky = self._radky(self.client.get(self.url, {"rok": 2026, "mesic": 10}))
+        (n,) = radky[date(2026, 10, 16)].nepritomnosti
+        self.assertEqual((n.typ.zkratka, n.minuty, n.po_hodinach, n.casy), ("DOV", 150, True, "9:00–11:30"))
+        self.assertEqual(radky[date(2026, 10, 16)].odpracovane_minuty, 300)
+
+    def test_radky_bez_dochazky_nemeni_bilanci(self):
+        response = self.client.get(self.url, {"rok": 2026, "mesic": 10})
+        celkem = response.context["celkem"]
+        # Jediný souhrn je 16. 10. (−30 min); přidané řádky přispívají nulami.
+        self.assertEqual((celkem.prescas, celkem.nedostatek, celkem.bilance), (0, 30, -30))
+        self.assertEqual(response.context["celkem_odpr"], 300)
+        (tyden,) = response.context["tydny"]
+        self.assertEqual((tyden.cislo, tyden.od, tyden.do), (42, date(2026, 10, 12), date(2026, 10, 18)))
+        self.assertEqual((tyden.bilance.prescas, tyden.bilance.nedostatek), (0, 30))
+
+    def test_souhrn_vsechny_aktivni_typy_a_pritomnost_zvlast(self):
+        response = self.client.get(self.url, {"rok": 2026, "mesic": 10})
+        souhrn = {r.typ.zkratka: (r.dny, r.minuty) for r in response.context["souhrn_nepritomnosti"]}
+        # 2 celé dny × 8 h + 2 h 30 min hodinově; hodinová žádost se do dnů nepočítá.
+        self.assertEqual(souhrn["DOV"], (2, 1110))
+        self.assertEqual(souhrn["NEM"], (1, 480))
+        # Všechny ostatní aktivní typy (i ty založené migracemi, např. IV) jsou v souhrnu s nulou.
+        self.assertEqual(souhrn["OČR"], (0, 0))
+        self.assertGreaterEqual(len(souhrn), 4)
+        self.assertEqual({v for k, v in souhrn.items() if k not in ("DOV", "NEM")}, {(0, 0)})
+        self.assertEqual(
+            [(r.typ.zkratka, r.dny, r.minuty) for r in response.context["souhrn_pritomnosti"] if r.minuty],
+            [("HOT", 1, 480)],
+        )
+
+        obsah = response.content.decode("utf-8")
+        self.assertIn("Nepřítomnosti za měsíc", obsah)
+        self.assertIn("18h 30min", obsah)
+        self.assertIn("Přítomnost mimo pracoviště", obsah)
+        self.assertIn("DOV 2h 30min", obsah)
+
+    def test_mesic_bez_nepritomnosti_ma_souhrn_s_pomlckami(self):
+        from leaves.models import ZadostOStav
+
+        ZadostOStav.objects.all().delete()
+        response = self.client.get(self.url, {"rok": 2026, "mesic": 10})
+        self.assertEqual(response.status_code, 200)
+        (tyden,) = response.context["tydny"]
+        self.assertEqual([s.datum for s in tyden.souhrny], [date(2026, 10, 16)])
+        self.assertTrue(all(r.minuty == 0 for r in response.context["souhrn_nepritomnosti"]))
+        self.assertTrue(all(r.minuty == 0 for r in response.context["souhrn_pritomnosti"]))
+        self.assertContains(response, "Nepřítomnosti za měsíc")
+        self.assertContains(response, "<td>—</td>", html=True)
+
+
+class NepritomnostiHelperTests(TestCase):
+    """Issue #117 — jediné místo, které skládá nepřítomnosti za měsíc."""
+
+    def setUp(self):
+        self.employee = vytvor_zamestnance()
+        self.typy = vytvor_nepritomnosti_rijna_2026(self.employee)
+
+    def test_jen_schvalene_zadosti_zvoleneho_mesice(self):
+        from timetracking.nepritomnosti import nepritomnosti_za_mesic
+
+        dny = nepritomnosti_za_mesic([self.employee], 2026, 10)[self.employee.pk]
+        self.assertEqual(sorted(dny), [date(2026, 10, d) for d in (12, 13, 14, 15, 16)])
+        self.assertEqual(
+            set(nepritomnosti_za_mesic([self.employee], 2026, 11)[self.employee.pk]),
+            {date(2026, 11, 2)},
+        )
+        self.assertEqual(nepritomnosti_za_mesic([self.employee], 2026, 9), {})
+        self.assertEqual(nepritomnosti_za_mesic([], 2026, 10), {})
+
+    def test_vikend_a_svatek_se_nevypisuji(self):
+        from accounts.holidays_model import StatniSvatek, Zeme
+        from leaves.models import ZadostOStav
+        from timetracking.nepritomnosti import nepritomnosti_za_mesic
+
+        zeme = Zeme.objects.create(kod="CZ", nazev="Česko")
+        StatniSvatek.objects.create(zeme=zeme, datum=date(2026, 10, 28), nazev="Vznik ČSR")
+        # Po 26. 10. – Ne 1. 11. přes státní svátek St 28. 10. a víkend.
+        ZadostOStav.objects.create(
+            employee=self.employee, typ=self.typy["nemoc"],
+            datum_od=date(2026, 10, 26), datum_do=date(2026, 11, 1),
+        )
+        dny = nepritomnosti_za_mesic([self.employee], 2026, 10)[self.employee.pk]
+        self.assertEqual(
+            [d for d in sorted(dny) if d >= date(2026, 10, 26)],
+            [date(2026, 10, d) for d in (26, 27, 29, 30)],
+        )
+
+    def test_pocet_dotazu_nezavisi_na_poctu_zamestnancu(self):
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+        from leaves.models import ZadostOStav
+        from timetracking.nepritomnosti import nepritomnosti_za_mesic
+
+        druhy = vytvor_zamestnance("druhy@example.com", "0002")
+        for den in (5, 6, 7):
+            ZadostOStav.objects.create(
+                employee=druhy, typ=self.typy["nemoc"],
+                datum_od=date(2026, 10, den), datum_do=date(2026, 10, den),
+            )
+        with CaptureQueriesContext(connection) as jeden:
+            nepritomnosti_za_mesic([self.employee], 2026, 10)
+        with CaptureQueriesContext(connection) as oba:
+            nepritomnosti_za_mesic([self.employee, druhy], 2026, 10)
+        # PRUZNA úvazek nemá dotazy na bloky — počet dotazů nezávisí na počtu žádostí.
+        self.assertEqual(len(jeden), len(oba))

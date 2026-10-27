@@ -353,10 +353,12 @@ class ZadostOStav(models.Model):
             return f"{den(self.datum_od)} {cas(self.cas_od)}–{cas(self.cas_do)}"
         return f"{den(self.datum_od)} {cas(self.cas_od)} – {den(self.datum_do)} {cas(self.cas_do)}"
 
-    def hodiny_po_dnech(self):
+    def hodiny_po_dnech(self, svatky=None):
         """Minuty dovolené po jednotlivých dnech rozsahu: `{datum: minuty}` jen pro dny
         Po–Pá bez státního svátku, ve kterých je něco k započítání. Jediné místo, ze
-        kterého čerpá `vypocitej_hodiny()` i kontroly součtu za den.
+        kterého čerpá `vypocitej_hodiny()` i kontroly součtu za den. `svatky` (množina
+        dat) volající předá, když počítá víc žádostí najednou (měsíční přehledy) — jinak
+        se načtou z databáze pro tuto žádost.
 
         Celé dny: denní norma (`TypUvazku.norma_minut`). Hodinová žádost na jeden den:
         rozdíl `cas_do − cas_od`. Hodinová žádost přes více dnů (pevná doba) je souvislý
@@ -369,11 +371,12 @@ class ZadostOStav(models.Model):
         if not (self.datum_od and self.datum_do and self.employee_id):
             return {}
 
-        svatky = set(
-            StatniSvatek.objects.filter(
-                datum__gte=self.datum_od, datum__lte=self.datum_do,
-            ).values_list("datum", flat=True)
-        )
+        if svatky is None:
+            svatky = set(
+                StatniSvatek.objects.filter(
+                    datum__gte=self.datum_od, datum__lte=self.datum_do,
+                ).values_list("datum", flat=True)
+            )
         typ_uvazku = self.employee.typ_uvazku
         po_hodinach = self.je_po_hodinach
         jeden_den = self.datum_od == self.datum_do
