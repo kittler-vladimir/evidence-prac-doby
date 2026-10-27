@@ -51,6 +51,7 @@
           <th>Přesčas</th>
           <th>Nedostatek</th>
           <th>Svátek/Víkend</th>
+          <th>Nepřítomnost</th>
         </tr>
       </thead>
       <tbody>
@@ -73,6 +74,7 @@
             {% if s.je_svatek %}<span class="badge bg-info">Svátek</span>{% endif %}
             {% if s.je_vikend %}<span class="badge bg-secondary">Víkend</span>{% endif %}
           </td>
+          <td>{% include "timetracking/_nepritomnosti_dne.html" with nepritomnosti=s.nepritomnosti %}</td>
         </tr>
         {% endfor %}
         <tr class="table-light fw-semibold small">
@@ -80,6 +82,7 @@
           <td>{{ t.bilance.prescas|minuty_hm }}</td>
           <td>{{ t.bilance.nedostatek|minuty_hm }}</td>
           <td>Bilance: {{ t.bilance.bilance|minuty_hm_znamenko }}</td>
+          <td></td>
         </tr>
         {% endfor %}
         {% if tydny %}
@@ -89,12 +92,15 @@
           <td>{{ celkem.prescas|minuty_hm }}</td>
           <td>{{ celkem.nedostatek|minuty_hm }}</td>
           <td>Bilance: {{ celkem.bilance|minuty_hm_znamenko }}</td>
+          <td></td>
         </tr>
         {% else %}
-        <tr><td colspan="5" class="text-center text-muted py-3">Žádné záznamy.</td></tr>
+        <tr><td colspan="6" class="text-center text-muted py-3">Žádné záznamy.</td></tr>
         {% endif %}
       </tbody>
     </table>
   </div>
 </div>
+
+{% include "timetracking/_souhrn_nepritomnosti.html" %}
 {% endblock %}

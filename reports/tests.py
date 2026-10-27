@@ -312,7 +312,10 @@ class PrehledTymuAExportBilanceTestCase(TestCase):
         wb = openpyxl.load_workbook(BytesIO(response.content))
         ws = wb.active
         hlavicka = [c.value for c in next(ws.iter_rows(min_row=1, max_row=1))]
-        self.assertEqual(hlavicka, ["Datum", "Den", "Odpracováno", "Přesčas", "Nedostatek", "Svátek/Víkend", "Bilance"])
+        self.assertEqual(
+            hlavicka,
+            ["Datum", "Den", "Odpracováno", "Přesčas", "Nedostatek", "Svátek/Víkend", "Bilance", "Nepřítomnost"],
+        )
 
         popisky = [row[0].value for row in ws.iter_rows(min_row=2) if row[0].value]
         tydenni_radky = [p for p in popisky if p and p.startswith("Týden")]
@@ -389,3 +392,100 @@ class VyberMesiceOdborAExportTestCase(TestCase):
         odpoved = self.client.get(reverse("reports:export_xlsx"), {"rok": "abc", "mesic": "13"})
         self.assertEqual(odpoved.status_code, 200)
         self.assertEqual(openpyxl.load_workbook(BytesIO(odpoved.content)).active.title, "Výkaz 10-2026")
+
+
+class NepritomnostiOdborAExportTestCase(TestCase):
+    """Issue #117 — Odbor má sloupce nepřítomností podle typu, XLSX sloupec a souhrn."""
+
+    def setUp(self):
+        from timetracking.tests import vytvor_nepritomnosti_rijna_2026, vytvor_zamestnance
+
+        self.zam = vytvor_zamestnance("n117@example.com", "0117")
+        self.typy = vytvor_nepritomnosti_rijna_2026(self.zam)
+        self.client = Client()
+        self.client.force_login(self.zam.user)
+
+    def test_odbor_ma_sloupce_jen_pro_pouzite_typy_a_hodnoty_po_zamestnanci(self):
+        response = self.client.get(reverse("reports:prehled_tymu"), {"rok": 2026, "mesic": 10})
+        self.assertEqual(response.status_code, 200)
+
+        # Použité typy: dovolená, nemoc, home office (přítomnost až nakonec); nepoužité typy ne.
+        self.assertEqual(
+            [t.zkratka for t in response.context["sloupce_nepritomnosti"]], ["DOV", "NEM", "HOT"],
+        )
+        (skupina,) = response.context["skupiny"]
+        (radek,) = skupina["radky"]
+        bunky = [(b.dny, b.minuty) for b in radek["bunky_nepritomnosti"]]
+        self.assertEqual(bunky, [(2, 1110), (1, 480), (1, 480)])
+
+        obsah = response.content.decode("utf-8")
+        self.assertIn("18h 30min", obsah)
+        self.assertIn("HOT (přítomnost)", obsah)
+        self.assertNotIn("OČR", obsah)
+
+    def test_odbor_bez_nepritomnosti_nema_sloupce_navic(self):
+        ZadostOStav.objects.all().delete()
+        response = self.client.get(reverse("reports:prehled_tymu"), {"rok": 2026, "mesic": 10})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["sloupce_nepritomnosti"], [])
+        self.assertNotContains(response, "Dnů")
+
+    def test_export_xlsx_ma_sloupec_nepritomnost_a_souhrn(self):
+        import openpyxl
+        from io import BytesIO
+
+        response = self.client.get(reverse("reports:export_xlsx"), {"rok": 2026, "mesic": 10})
+        self.assertEqual(response.status_code, 200)
+        ws = openpyxl.load_workbook(BytesIO(response.content)).active
+
+        hlavicka = [c.value for c in ws[1]]
+        # Dosavadních 7 sloupců beze změny, Nepřítomnost je za nimi.
+        self.assertEqual(
+            hlavicka,
+            ["Datum", "Den", "Odpracováno", "Přesčas", "Nedostatek", "Svátek/Víkend", "Bilance", "Nepřítomnost"],
+        )
+        podle_data = {r[0].value: r[7].value for r in ws.iter_rows(min_row=2) if r[0].value}
+        self.assertEqual(podle_data["12.10.2026"], "DOV")
+        self.assertEqual(podle_data["14.10.2026"], "HOT (přítomnost)")
+        self.assertEqual(podle_data["15.10.2026"], "NEM")
+        self.assertEqual(podle_data["16.10.2026"], "DOV 2h 30min")
+        self.assertIsNone(podle_data["19.10.2026"])  # čekající žádost
+
+        radky = {r[0].value: (r[1].value, r[2].value) for r in ws.iter_rows(min_row=2) if r[0].value}
+        self.assertEqual(radky["DOV – Dovolená"], (2, "18h 30min"))
+        self.assertEqual(radky["NEM – Nemoc"], (1, "8h 0min"))
+        self.assertEqual(radky["OČR – Ošetřování člena rodiny"], ("—", "—"))
+        self.assertEqual(radky["HOT – Home office test"], (1, "8h 0min"))
+        popisky = [r[0].value for r in ws.iter_rows(min_row=2) if r[0].value]
+        self.assertLess(popisky.index("Celkem za měsíc"), popisky.index("Nepřítomnosti za měsíc"))
+        self.assertLess(popisky.index("Nepřítomnosti za měsíc"), popisky.index("Přítomnost mimo pracoviště"))
+
+        # Bilance se nezměnila: jediný souhrn je 16. 10. (−30 min).
+        celkem = next(r for r in ws.iter_rows(min_row=2) if r[0].value == "Celkem za měsíc")
+        self.assertEqual((celkem[3].value, celkem[4].value, celkem[6].value),
+                         ("0h 0min", "0h 30min", "−0h 30min"))
+
+    def _xlsx_listu(self):
+        import openpyxl
+        from io import BytesIO
+
+        response = self.client.get(reverse("reports:export_xlsx"), {"rok": 2026, "mesic": 10})
+        return openpyxl.load_workbook(BytesIO(response.content)).active
+
+    def test_export_ma_tydenni_radek_i_pro_tyden_jen_s_nepritomnosti(self):
+        # Stejné týdny jako ve Výkazu: týden 42 má řádky jen díky dovolené/nemoci, bez docházky.
+        WorkdaySummary.objects.all().delete()
+        popisky = [r[0].value for r in self._xlsx_listu().iter_rows(min_row=2) if r[0].value]
+        self.assertTrue(any(p.startswith("Týden 42") for p in popisky))
+
+    def test_typ_jen_s_hodinovou_zadosti_ma_ve_dnech_pomlcku(self):
+        ZadostOStav.objects.filter(typ=self.typy["dovolena"], cas_od__isnull=True).delete()
+        response = self.client.get(reverse("reports:prehled_tymu"), {"rok": 2026, "mesic": 10})
+        (skupina,) = response.context["skupiny"]
+        (radek,) = skupina["radky"]
+        dov = radek["bunky_nepritomnosti"][0]
+        self.assertEqual((dov.typ.zkratka, dov.dny, dov.minuty), ("DOV", 0, 150))
+        self.assertNotContains(response, "<td>0</td>", html=True)
+
+        radky = {r[0].value: (r[1].value, r[2].value) for r in self._xlsx_listu().iter_rows(min_row=2) if r[0].value}
+        self.assertEqual(radky["DOV – Dovolená"], ("—", "2h 30min"))

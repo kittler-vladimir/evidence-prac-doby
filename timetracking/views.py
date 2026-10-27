@@ -13,6 +13,7 @@ from leaves.views import zprava_o_zruseni
 
 from .bilance import rozdel_na_tydny, secti
 from .models import WorkSession, WorkdaySummary, Pohyb, TypPohybu
+from .nepritomnosti import nepritomnosti_za_mesic, radky_souhrnu, radky_vykazu, souhrn_podle_typu
 from .obdobi import zvolene_obdobi
 from .forms import PohybOpravitForm, WorkSessionOpravitForm, WorkSessionRucneForm, PohybRucneForm
 from .opravy import (
@@ -344,9 +345,15 @@ def prehled_mesice(request):
         datum__month=mesic,
     ).order_by("datum"))
 
+    dny = nepritomnosti_za_mesic([employee], rok, mesic).get(employee.pk, {})
+    radky = radky_vykazu(souhrny, dny)
+    nepritomnosti, pritomnost = radky_souhrnu(souhrn_podle_typu(dny))
+
     context = {
         "souhrny": souhrny,
-        "tydny": rozdel_na_tydny(souhrny, rok, mesic),
+        "tydny": rozdel_na_tydny(radky, rok, mesic),
+        "souhrn_nepritomnosti": nepritomnosti,
+        "souhrn_pritomnosti": pritomnost,
         "obdobi": obdobi,
         "rok": rok,
         "mesic": mesic,

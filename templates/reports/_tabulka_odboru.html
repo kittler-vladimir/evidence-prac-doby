@@ -1,0 +1,34 @@
+{% load timetracking_extras %}
+<table class="table table-hover mb-0">
+  <thead class="table-light">
+    <tr>
+      <th{% if sloupce %} rowspan="2" class="align-middle"{% endif %}>Zaměstnanec</th>
+      <th{% if sloupce %} rowspan="2" class="align-middle"{% endif %}>Odpracováno</th>
+      <th{% if sloupce %} rowspan="2" class="align-middle"{% endif %}>Přesčas</th>
+      <th{% if sloupce %} rowspan="2" class="align-middle"{% endif %}>Nedostatek</th>
+      <th{% if sloupce %} rowspan="2" class="align-middle"{% endif %}>Bilance</th>
+      {% for t in sloupce %}
+      <th colspan="2" class="text-center {% if t.je_pritomnost %}border-start border-2{% endif %}" title="{{ t.nazev }}{% if t.je_pritomnost %} – přítomnost mimo pracoviště{% endif %}">{{ t.zkratka }}{% if t.je_pritomnost %} (přítomnost){% endif %}</th>
+      {% endfor %}
+    </tr>
+    {% if sloupce %}
+    <tr>
+      {% for t in sloupce %}<th class="small fw-normal">Dnů</th><th class="small fw-normal">Hodin</th>{% endfor %}
+    </tr>
+    {% endif %}
+  </thead>
+  <tbody>
+    {% for d in radky %}
+    <tr>
+      <td>{{ d.employee.jmeno }}</td>
+      <td>{{ d.odpracovano_h }}h {{ d.odpracovano_m }}min</td>
+      <td>{{ d.prescas_minuty|minuty_hm }}</td>
+      <td>{{ d.nedostatek_minuty|minuty_hm }}</td>
+      <td>{{ d.bilance_minuty|minuty_hm_znamenko }}</td>
+      {% for b in d.bunky_nepritomnosti %}
+      {% if b and b.minuty %}<td>{% if b.dny %}{{ b.dny }}{% else %}—{% endif %}</td><td>{{ b.minuty|minuty_hm }}</td>{% else %}<td class="text-muted">—</td><td class="text-muted">—</td>{% endif %}
+      {% endfor %}
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>

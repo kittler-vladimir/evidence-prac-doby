@@ -11,6 +11,7 @@ from django.http import HttpResponse
 from accounts.models import Employee, Odbor, Oddeleni, Sekce, viditelni_zamestnanci
 from timetracking.bilance import format_minut, rozdel_na_tydny, secti
 from timetracking.models import WorkdaySummary
+from timetracking.nepritomnosti import nepritomnosti_za_mesic, radky_souhrnu, radky_vykazu, souhrn_podle_typu, typy_sloupcu
 from timetracking.obdobi import zvolene_obdobi
 from timetracking.opravy import zaznamy_k_oprave
 from .services import NEPRITOMEN, PRITOMEN, stavy_zamestnancu
@@ -136,6 +137,9 @@ def prehled_tymu(request):
         "user", "typ_uvazku", "oddeleni__odbor__sekce"
     ).order_by(*SERAZENI_PODLE_HIERARCHIE)
 
+    podrizeni = list(podrizeni)
+    dny_nepritomnosti = nepritomnosti_za_mesic(podrizeni, rok, mesic)
+
     data = []
     for podr in podrizeni:
         souhrny = list(WorkdaySummary.objects.filter(
@@ -150,7 +154,14 @@ def prehled_tymu(request):
             "prescas_minuty": bilance.prescas,
             "nedostatek_minuty": bilance.nedostatek,
             "bilance_minuty": bilance.bilance,
+            "nepritomnosti_podle_typu": souhrn_podle_typu(dny_nepritomnosti.get(podr.pk, {})),
         })
+
+    # Sloupce jen pro typy, které někdo ve výběru v měsíci použil (tabulka není široká
+    # prázdnými sloupci).
+    sloupce = typy_sloupcu(d["nepritomnosti_podle_typu"] for d in data)
+    for d in data:
+        d["bunky_nepritomnosti"] = [d["nepritomnosti_podle_typu"].get(t.pk) for t in sloupce]
 
     skupiny = _seskup_hierarchicky(data) if request.user.is_staff else _seskup_podle_oddeleni(data)
 
@@ -165,6 +176,7 @@ def prehled_tymu(request):
 
     return render(request, "reports/prehled_tymu.html", {
         "skupiny": skupiny, "filtr": filtr, "obdobi": obdobi, "rok": rok, "mesic": mesic,
+        "sloupce_nepritomnosti": sloupce,
         "zaznamy_k_oprave": zaznamy_k_oprave(spravovani),
     })
 
@@ -190,12 +202,14 @@ def export_xlsx(request):
         )
     }
 
+    dny_nepritomnosti = nepritomnosti_za_mesic([employee], rok, mesic).get(employee.pk, {})
+
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = f"Výkaz {mesic:02d}-{rok}"  # "/" je v názvu listu Excelu neplatný znak
 
     # Záhlaví
-    hlavicka = ["Datum", "Den", "Odpracováno", "Přesčas", "Nedostatek", "Svátek/Víkend", "Bilance"]
+    hlavicka = ["Datum", "Den", "Odpracováno", "Přesčas", "Nedostatek", "Svátek/Víkend", "Bilance", "Nepřítomnost"]
     for col, text in enumerate(hlavicka, 1):
         cell = ws.cell(row=1, column=col, value=text)
         cell.font = Font(bold=True)
@@ -208,7 +222,7 @@ def export_xlsx(request):
 
     # Stejné seskupení po ISO týdnech jako na timetracking:prehled_mesice —
     # jeden zdroj pravdy pro to, kde končí týden a kam patří rozpracovaný den.
-    tydny = rozdel_na_tydny(souhrny.values(), rok, mesic)
+    tydny = rozdel_na_tydny(radky_vykazu(list(souhrny.values()), dny_nepritomnosti), rok, mesic)
     tyden_podle_posledniho_dne = {t.do: t for t in tydny}
 
     row = 2
@@ -218,6 +232,8 @@ def export_xlsx(request):
 
         ws.cell(row=row, column=1, value=datum.strftime("%d.%m.%Y"))
         ws.cell(row=row, column=2, value=nazvy_dnu[datum.weekday()])
+        if datum in dny_nepritomnosti:
+            ws.cell(row=row, column=8, value=_text_nepritomnosti(dny_nepritomnosti[datum]))
 
         if souhrn:
             poznamka = []
@@ -243,6 +259,7 @@ def export_xlsx(request):
             row += 1
 
     _zapis_souhrnny_radek(ws, row, "Celkem za měsíc", secti(souhrny.values()), tucne)
+    _zapis_souhrn_nepritomnosti(ws, row + 2, souhrn_podle_typu(dny_nepritomnosti), tucne)
 
     response = HttpResponse(
         content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -252,6 +269,39 @@ def export_xlsx(request):
     )
     wb.save(response)
     return response
+
+
+def _text_nepritomnosti(polozky):
+    """Buňka „Nepřítomnost“ dne: zkratky typů, u hodinové žádosti i hodiny, u typu
+    přítomnosti mimo pracoviště (home office) navíc „(přítomnost)“."""
+    casti = []
+    for n in polozky:
+        text = n.typ.zkratka
+        if n.po_hodinach:
+            text += f" {format_minut(n.minuty)}"
+        if n.je_pritomnost:
+            text += " (přítomnost)"
+        casti.append(text)
+    return ", ".join(casti)
+
+
+def _zapis_souhrn_nepritomnosti(ws, row, souhrn, font):
+    """Souhrn nepřítomností za měsíc pod součty: typ, dnů, hodin; přítomnost mimo
+    pracoviště zvlášť (nepočítá se mezi nepřítomnosti)."""
+    nepritomnosti, pritomnost = radky_souhrnu(souhrn)
+    for nadpis, radky in (("Nepřítomnosti za měsíc", nepritomnosti),
+                          ("Přítomnost mimo pracoviště", pritomnost)):
+        if not radky:
+            continue
+        for col, text in enumerate((nadpis, "Dnů", "Hodin"), 1):
+            ws.cell(row=row, column=col, value=text).font = font
+        row += 1
+        for r in radky:
+            ws.cell(row=row, column=1, value=f"{r.typ.zkratka} – {r.typ.nazev}")
+            ws.cell(row=row, column=2, value=r.dny or "—")
+            ws.cell(row=row, column=3, value=format_minut(r.minuty) if r.minuty else "—")
+            row += 1
+        row += 1
 
 
 def _zapis_souhrnny_radek(ws, row, popisek, bilance, font):
