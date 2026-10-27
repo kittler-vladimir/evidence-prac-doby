@@ -1948,6 +1948,9 @@ class NepritomnostiVeVykazuTests(TestCase):
         self.assertIn("18h 30min", obsah)
         self.assertIn("Přítomnost mimo pracoviště", obsah)
         self.assertIn("DOV 2h 30min", obsah)
+        # Celodenní nepřítomnost ukazuje v řádku výkazu také započítaný čas (denní normu).
+        self.assertIn("DOV 8h 0min", obsah)
+        self.assertIn("NEM 8h 0min", obsah)
 
     def test_mesic_bez_nepritomnosti_ma_souhrn_s_pomlckami(self):
         from leaves.models import ZadostOStav

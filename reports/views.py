@@ -272,13 +272,11 @@ def export_xlsx(request):
 
 
 def _text_nepritomnosti(polozky):
-    """Buňka „Nepřítomnost“ dne: zkratky typů, u hodinové žádosti i hodiny, u typu
-    přítomnosti mimo pracoviště (home office) navíc „(přítomnost)“."""
+    """Buňka „Nepřítomnost“ dne: zkratka a započítaný čas každého typu (celý den i hodinová
+    žádost), u typu přítomnosti mimo pracoviště (home office) navíc „(přítomnost)“."""
     casti = []
     for n in polozky:
-        text = n.typ.zkratka
-        if n.po_hodinach:
-            text += f" {format_minut(n.minuty)}"
+        text = f"{n.typ.zkratka} {format_minut(n.minuty)}"
         if n.je_pritomnost:
             text += " (přítomnost)"
         casti.append(text)
