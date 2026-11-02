@@ -57,12 +57,19 @@ def nova_zadost(request):
         if form.is_valid():
             zadost = form.save(commit=False)
             zadost.employee = employee
-            zadost.save()
-            if zadost.typ.vyzaduje_schvaleni:
-                messages.success(request, "Žádost byla odeslána ke schválení.")
+            try:
+                zadost.save()
+            except ValidationError as e:
+                # Ořezání překryté žádosti selhalo — transakce se vrátila, nic se neuložilo.
+                form.add_error(None, e)
             else:
-                messages.success(request, "Záznam byl uložen.")
-            return redirect("leaves:moje_zadosti")
+                if zadost.typ.vyzaduje_schvaleni:
+                    messages.success(request, "Žádost byla odeslána ke schválení.")
+                else:
+                    messages.success(request, "Záznam byl uložen.")
+                for orezani in zadost.orezani:
+                    messages.warning(request, orezani.zprava)
+                return redirect("leaves:moje_zadosti")
     else:
         form = ZadostOStavForm(employee=employee)
 

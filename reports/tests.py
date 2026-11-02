@@ -474,6 +474,14 @@ class NepritomnostiOdborAExportTestCase(TestCase):
 
     def test_export_ma_tydenni_radek_i_pro_tyden_jen_s_nepritomnosti(self):
         # Stejné týdny jako ve Výkazu: týden 42 má řádky jen díky dovolené/nemoci, bez docházky.
+        # Bez souhrnů by `zvolene_obdobi` bral za nejstarší měsíc ten dnešní, proto datum pevně.
+        from unittest import mock
+
+        patcher = mock.patch(
+            "timetracking.obdobi.timezone.localdate", return_value=date(2026, 10, 27),
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
         WorkdaySummary.objects.all().delete()
         popisky = [r[0].value for r in self._xlsx_listu().iter_rows(min_row=2) if r[0].value]
         self.assertTrue(any(p.startswith("Týden 42") for p in popisky))

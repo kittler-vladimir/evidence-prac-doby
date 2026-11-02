@@ -704,9 +704,12 @@ class HodinovaDovolenaTests(TestCase):
         with self.assertRaisesMessage(ValidationError, "časově překrývá"):
             zadost.full_clean()
 
-    def test_dve_celodenni_zadosti_se_dal_nehlidaji(self):
+    def test_dve_celodenni_zadosti_ve_stejny_den_jsou_zamitnuty(self):
+        # #120: překryv se hlídá i u dvou žádostí na celé dny.
         self._uloz(self.emp_pruzna, self.PONDELI, self.PONDELI)
-        self._uloz(self.emp_pruzna, self.PONDELI, self.PONDELI)
+        zadost = self._zadost(self.emp_pruzna, self.PONDELI, self.PONDELI)
+        with self.assertRaisesMessage(ValidationError, "časově překrývá"):
+            zadost.full_clean()
 
     def test_stornovana_zadost_neblokuje(self):
         puvodni = self._uloz(self.emp_pruzna, self.PONDELI, self.PONDELI, time(9, 0), time(11, 0))
@@ -1736,3 +1739,410 @@ class ZruseniNepritomnostiTests(TestCase):
         pozdeji = timezone.make_aware(datetime.combine(date(2026, 10, 16), time(9, 0)))
         with patch("django.utils.timezone.now", return_value=pozdeji):
             self.assertTrue(zruseni.je_zpetne)
+
+
+class PrekryvZadostiTests(TestCase):
+    """#120 — žádosti o stav jednoho zaměstnance se nesmějí překrývat (celé dny ani čas);
+    nemoc a OČR (`TypStavu.ma_prednost`) mají přednost a překrytou žádost ořežou."""
+
+    PO = date(2026, 11, 2)  # po 2. – pá 6. 11. 2026, bez státního svátku
+    UT = date(2026, 11, 3)
+    ST = date(2026, 11, 4)
+    CT = date(2026, 11, 5)
+    PA = date(2026, 11, 6)
+    SO = date(2026, 11, 7)
+    NE = date(2026, 11, 8)
+
+    def setUp(self):
+        sekce = Sekce.objects.create(nazev="Sekce", kod="S1")
+        odbor = Odbor.objects.create(sekce=sekce, nazev="Odbor", kod="O1")
+        self.oddeleni = Oddeleni.objects.create(odbor=odbor, nazev="Oddělení", kod="OD1")
+        self.typ_uvazku = TypUvazku.objects.create(
+            nazev="Plný", hodiny_denne=Decimal("8.00"), hodiny_tyydne=Decimal("40.00"),
+        )
+        NarokDovolene.objects.create(hodin=Decimal("160.00"), platne_od=date(2026, 1, 1))
+        self.vedouci = self._zamestnanec("vedouci@example.com", "1")
+        self.oddeleni.vedouci = self.vedouci
+        self.oddeleni.save()
+        self.radovy = self._zamestnanec("radovy@example.com", "2")
+        self.jiny = self._zamestnanec("jiny@example.com", "3")
+
+        self.dovolena = TypStavu.objects.create(
+            nazev="Dovolená", zkratka="DOV", je_dovolena=True, odecita_ze_zustatku=True,
+            kategorie_pro_prehled=TypStavu.KategoriePrehled.DOVOLENA,
+            umoznuje_zadani_po_hodinach=True,
+        )
+        self.studijni = TypStavu.objects.create(
+            nazev="Studijní volno", zkratka="STU", odecita_ze_zustatku=False,
+        )
+        self.home_office = TypStavu.objects.create(
+            nazev="Home office", zkratka="HO", odecita_ze_zustatku=False,
+            vyzaduje_schvaleni=False, je_pritomnost=True,
+        )
+        self.nemoc = TypStavu.objects.create(
+            nazev="Nemoc test", zkratka="NMT", odecita_ze_zustatku=False,
+            vyzaduje_schvaleni=False, ma_prednost=True,
+            kategorie_pro_prehled=TypStavu.KategoriePrehled.NEMOC,
+        )
+        self.ocr = TypStavu.objects.create(
+            nazev="OČR test", zkratka="OCT", odecita_ze_zustatku=False,
+            vyzaduje_schvaleni=False, ma_prednost=True,
+            kategorie_pro_prehled=TypStavu.KategoriePrehled.OCR,
+        )
+
+    def _zamestnanec(self, email, cislo):
+        user = User.objects.create_user(
+            username=email, email=email, first_name="Jan", last_name=cislo,
+        )
+        return Employee.objects.create(
+            user=user, osobni_cislo=cislo, oddeleni=self.oddeleni,
+            typ_uvazku=self.typ_uvazku, datum_nastupu=date(2020, 1, 1),
+        )
+
+    def _zadost(self, typ, od, do, cas_od=None, cas_do=None, employee=None):
+        return ZadostOStav(
+            employee=employee or self.radovy, typ=typ, datum_od=od, datum_do=do,
+            cas_od=cas_od, cas_do=cas_do,
+        )
+
+    def _uloz(self, typ, od, do, cas_od=None, cas_do=None, employee=None):
+        zadost = self._zadost(typ, od, do, cas_od, cas_do, employee)
+        zadost.full_clean()
+        zadost.save()
+        return zadost
+
+    def _schvalena_dovolena(self, od=None, do=None, cas_od=None, cas_do=None):
+        zadost = self._uloz(self.dovolena, od or self.PO, do or self.PA, cas_od, cas_do)
+        zadost.schval(self.vedouci)
+        return zadost
+
+    def _cerpano(self):
+        return ZustatekStavu.objects.get(
+            employee=self.radovy, rok=2026, typ=self.dovolena,
+        ).cerpano_hodin
+
+    def _rozsahy(self, typ, stav=None):
+        zadosti = ZadostOStav.objects.filter(employee=self.radovy, typ=typ)
+        if stav:
+            zadosti = zadosti.filter(stav=stav)
+        return sorted((z.datum_od, z.datum_do) for z in zadosti)
+
+    # --- zákaz překryvu ---
+
+    def test_dve_celodenni_zadosti_se_spolecnym_dnem_jsou_zamitnuty(self):
+        self._schvalena_dovolena()
+        zadost = self._zadost(self.dovolena, self.PA, date(2026, 11, 10))
+        with self.assertRaises(ValidationError) as ctx:
+            zadost.full_clean()
+        zprava = " ".join(ctx.exception.messages)
+        self.assertIn("Dovolená", zprava)
+        self.assertIn("2. 11. 2026 – 6. 11. 2026", zprava)
+
+    def test_ruzne_typy_se_take_nesmeji_prekryvat(self):
+        self._uloz(self.studijni, self.ST, self.CT)
+        with self.assertRaisesMessage(ValidationError, "Studijní volno"):
+            self._zadost(self.dovolena, self.CT, self.CT).full_clean()
+
+    def test_home_office_se_s_dovolenou_prekryvat_nesmi(self):
+        self._schvalena_dovolena()
+        with self.assertRaisesMessage(ValidationError, "časově překrývá"):
+            self._zadost(self.home_office, self.ST, self.ST).full_clean()
+
+    def test_cekajici_zadost_take_blokuje(self):
+        self._uloz(self.dovolena, self.PO, self.PA)
+        with self.assertRaisesMessage(ValidationError, "časově překrývá"):
+            self._zadost(self.studijni, self.ST, self.ST).full_clean()
+
+    def test_vikend_bez_spolecneho_zapocitaneho_dne_neni_kolize(self):
+        self._schvalena_dovolena()
+        # So–Ne nemá žádný započítaný den, takže se s dovolenou do pátku nekříží.
+        self._zadost(self.studijni, self.SO, self.NE).full_clean()
+
+    def test_statni_svatek_neni_spolecny_zapocitany_den(self):
+        zeme = Zeme.objects.create(kod="CZ", nazev="Česko")
+        StatniSvatek.objects.create(datum=self.ST, nazev="Svátek", zeme=zeme)
+        self._uloz(self.studijni, self.PO, self.UT)
+        self._zadost(self.dovolena, self.ST, self.ST).full_clean()
+
+    def test_zamitnuta_stornovana_a_cizi_zadost_neblokuji(self):
+        zamitnuta = self._uloz(self.dovolena, self.PO, self.PA)
+        zamitnuta.zamitni(self.vedouci)
+        stornovana = self._uloz(self.studijni, self.PO, self.PA)
+        stornovana.stav = ZadostOStav.Stav.STORNOVÁNO
+        stornovana.save()
+        self._uloz(self.dovolena, self.PO, self.PA, employee=self.jiny)
+        self._zadost(self.dovolena, self.PO, self.PA).full_clean()
+
+    def test_uprava_zadosti_nekoliduje_sama_se_sebou(self):
+        zadost = self._uloz(self.dovolena, self.PO, self.PA)
+        zadost.datum_do = self.CT
+        zadost.full_clean()
+
+    def test_formular_hlasi_prekryv(self):
+        self._schvalena_dovolena()
+        form = ZadostOStavForm(
+            {"typ": self.studijni.pk, "datum_od": "2026-11-04", "datum_do": "2026-11-04"},
+            employee=self.radovy,
+        )
+        self.assertFalse(form.is_valid())
+        self.assertIn("Dovolená", " ".join(form.non_field_errors()))
+
+    # --- příznak ma_prednost ---
+
+    def test_prednost_s_vyzadovanym_schvalenim_je_neplatna(self):
+        typ = TypStavu(
+            nazev="Divný", zkratka="DIV", odecita_ze_zustatku=False,
+            vyzaduje_schvaleni=True, ma_prednost=True,
+        )
+        with self.assertRaisesMessage(ValidationError, "přednostním zápisem"):
+            typ.full_clean()
+
+    def test_migrace_zapnula_prednost_u_nemoci(self):
+        seed = TypStavu.objects.get(zkratka="NEM", kategorie_pro_prehled="NEMOC")
+        self.assertTrue(seed.ma_prednost)
+        self.assertFalse(TypStavu.objects.get(pk=self.dovolena.pk).ma_prednost)
+
+    def test_prednostni_proti_prednostni_je_zamitnuto(self):
+        self._uloz(self.nemoc, self.ST, self.CT)
+        with self.assertRaisesMessage(ValidationError, "s přednostním zápisem: Nemoc test"):
+            self._zadost(self.ocr, self.CT, self.PA).full_clean()
+        with self.assertRaisesMessage(ValidationError, "s přednostním zápisem: Nemoc test"):
+            self._zadost(self.nemoc, self.CT, self.PA).full_clean()
+
+    def test_neprednostni_proti_existujici_nemoci_je_zamitnuta(self):
+        self._uloz(self.nemoc, self.ST, self.CT)
+        with self.assertRaisesMessage(ValidationError, "s přednostním zápisem: Nemoc test"):
+            self._zadost(self.dovolena, self.CT, self.PA).full_clean()
+
+    # --- ořezání překryté žádosti ---
+
+    def test_nemoc_vyreze_dny_ze_schvalene_dovolene(self):
+        self._schvalena_dovolena()
+        self.assertEqual(self._cerpano(), Decimal("40.00"))
+        mail.outbox.clear()
+
+        nemoc = self._uloz(self.nemoc, self.ST, self.CT)
+
+        self.assertEqual(nemoc.stav, ZadostOStav.Stav.SCHVALENO)
+        self.assertEqual(
+            self._rozsahy(self.dovolena, ZadostOStav.Stav.SCHVALENO),
+            [(self.PO, self.UT), (self.PA, self.PA)],
+        )
+        self.assertEqual(self._cerpano(), Decimal("24.00"))
+        # Obě schválené části si nesou audit původní žádosti.
+        for cast in ZadostOStav.objects.filter(typ=self.dovolena):
+            self.assertEqual(cast.schvaleno_kym, self.vedouci)
+
+    def test_nemoc_pres_celou_dovolenou_ji_stornuje_a_vrati_hodiny(self):
+        dovolena = self._schvalena_dovolena()
+        self._uloz(self.nemoc, self.PO - timedelta(days=3), self.NE + timedelta(days=3))
+        dovolena.refresh_from_db()
+        self.assertEqual(dovolena.stav, ZadostOStav.Stav.STORNOVÁNO)
+        self.assertEqual(self._cerpano(), Decimal("0.00"))
+
+    def test_nemoc_orizne_cekajici_zadost_bez_zmeny_zustatku(self):
+        self._uloz(self.dovolena, self.PO, self.PA)
+        mail.outbox.clear()
+        self._uloz(self.nemoc, self.ST, self.CT)
+        self.assertEqual(
+            self._rozsahy(self.dovolena, ZadostOStav.Stav.CEKA),
+            [(self.PO, self.UT), (self.PA, self.PA)],
+        )
+        # Čekající žádost nic neodečetla, takže zůstatek nevznikl ani se nezměnil.
+        self.assertFalse(
+            ZustatekStavu.objects.filter(employee=self.radovy, typ=self.dovolena).exists()
+        )
+        self.assertFalse(
+            [m for m in mail.outbox if m.subject.startswith("Nová žádost")],
+            "zbylá část čekající žádosti nesmí vyvolat e-mail o nové žádosti",
+        )
+
+    def test_cekajici_zadost_pokryta_cela_je_stornovana(self):
+        dovolena = self._uloz(self.dovolena, self.ST, self.CT)
+        self._uloz(self.nemoc, self.UT, self.PA)
+        dovolena.refresh_from_db()
+        self.assertEqual(dovolena.stav, ZadostOStav.Stav.STORNOVÁNO)
+
+    def test_nemoc_zrusi_cele_hodinovou_zadost(self):
+        hodinova = self._schvalena_dovolena(self.ST, self.ST, time(9, 0), time(11, 30))
+        self.assertEqual(self._cerpano(), Decimal("2.50"))
+        self._uloz(self.nemoc, self.ST, self.CT)
+        hodinova.refresh_from_db()
+        self.assertEqual(hodinova.stav, ZadostOStav.Stav.STORNOVÁNO)
+        self.assertEqual(self._cerpano(), Decimal("0.00"))
+
+    def test_zruseni_hodinove_zadosti_prepocita_souhrn_dne(self):
+        self._schvalena_dovolena(self.ST, self.ST, time(9, 0), time(11, 30))
+        WorkSession.objects.create(
+            employee=self.radovy,
+            zacatek=timezone.make_aware(datetime.combine(self.ST, time(7, 0))),
+            konec=timezone.make_aware(datetime.combine(self.ST, time(8, 0))),
+        )
+        souhrn = WorkdaySummary.objects.get(employee=self.radovy, datum=self.ST)
+        self.assertEqual(souhrn.prescos_minuty, 60 - 480 + 150)
+        self._uloz(self.nemoc, self.ST, self.ST)
+        souhrn.refresh_from_db()
+        self.assertEqual(souhrn.prescos_minuty, 60 - 480)
+
+    def test_cekajici_zadost_o_zruseni_se_uzavre_bez_e_mailu(self):
+        dovolena = self._schvalena_dovolena()
+        zruseni = dovolena.zrus_nepritomnost(self.ST, self.ST)
+        self.assertEqual(zruseni.stav, ZadostOZruseni.Stav.CEKA)
+        mail.outbox.clear()
+
+        self._uloz(self.nemoc, self.ST, self.CT)
+
+        zruseni.refresh_from_db()
+        self.assertEqual(zruseni.stav, ZadostOZruseni.Stav.ZAMITNUTO)
+        self.assertFalse([m for m in mail.outbox if "Zrušení" in m.subject])
+
+    def test_orezani_posle_email_zamestnanci_i_schvalovateli(self):
+        self._schvalena_dovolena()
+        mail.outbox.clear()
+        self._uloz(self.nemoc, self.ST, self.CT)
+        adresati = sorted(m.to[0] for m in mail.outbox)
+        self.assertEqual(adresati, ["radovy@example.com", "vedouci@example.com"])
+        for m in mail.outbox:
+            self.assertIn("zkrácena", m.subject)
+            self.assertIn("16,00 h", m.body)
+            self.assertIn("Nemoc test", m.body)
+
+    def test_zruseni_cele_zadosti_ma_v_predmetu_zrusena(self):
+        self._schvalena_dovolena(self.ST, self.ST)
+        mail.outbox.clear()
+        self._uloz(self.nemoc, self.ST, self.ST)
+        self.assertEqual(len(mail.outbox), 2)
+        self.assertTrue(all("zrušena" in m.subject for m in mail.outbox))
+
+    def test_orezana_zadost_ma_auditni_poznamku(self):
+        dovolena = self._schvalena_dovolena()
+        self._uloz(self.nemoc, self.ST, self.CT)
+        dovolena.refresh_from_db()
+        self.assertIn(
+            "[AUTOMATICKY] Zkráceno kvůli přednostnímu stavu Nemoc test",
+            dovolena.poznamka_schvalovatele,
+        )
+
+    def test_selhani_orezani_vrati_vsechno_zpet(self):
+        self._schvalena_dovolena()
+        with patch.object(ZadostOStav, "zrus", side_effect=ValidationError("selhalo")):
+            with self.assertRaises(ValidationError):
+                self._uloz(self.nemoc, self.ST, self.CT)
+        self.assertFalse(ZadostOStav.objects.filter(typ=self.nemoc).exists())
+        self.assertEqual(self._rozsahy(self.dovolena), [(self.PO, self.PA)])
+
+    def test_prodlouzeni_nemoci_orizne_nove_pokryte_dny(self):
+        self._schvalena_dovolena()
+        nemoc = self._uloz(self.nemoc, self.ST, self.ST)
+        self.assertEqual(
+            self._rozsahy(self.dovolena, ZadostOStav.Stav.SCHVALENO),
+            [(self.PO, self.UT), (self.CT, self.PA)],
+        )
+        nemoc.datum_do = self.CT
+        nemoc.full_clean()
+        nemoc.save()
+        self.assertEqual(
+            self._rozsahy(self.dovolena, ZadostOStav.Stav.SCHVALENO),
+            [(self.PO, self.UT), (self.PA, self.PA)],
+        )
+
+    def test_zruseni_nemoci_orezanou_dovolenou_neobnovi(self):
+        self._schvalena_dovolena()
+        nemoc = self._uloz(self.nemoc, self.ST, self.CT)
+        nemoc.stav = ZadostOStav.Stav.STORNOVÁNO
+        nemoc.save()
+        self.assertEqual(
+            self._rozsahy(self.dovolena, ZadostOStav.Stav.SCHVALENO),
+            [(self.PO, self.UT), (self.PA, self.PA)],
+        )
+
+    def test_nemoc_orizne_i_home_office(self):
+        ho = self._uloz(self.home_office, self.ST, self.CT)
+        self._uloz(self.nemoc, self.CT, self.CT)
+        ho.refresh_from_db()
+        self.assertEqual((ho.datum_od, ho.datum_do), (self.ST, self.ST))
+        self.assertEqual(ho.stav, ZadostOStav.Stav.SCHVALENO)
+
+    def test_nemoc_bez_kolize_nic_neorezava(self):
+        self._schvalena_dovolena()
+        mail.outbox.clear()
+        nemoc = self._uloz(self.nemoc, self.SO, self.NE)
+        self.assertFalse(nemoc.orezani)
+        self.assertEqual(self._rozsahy(self.dovolena), [(self.PO, self.PA)])
+        self.assertEqual(mail.outbox, [])
+
+    # --- view ---
+
+    def test_view_ukaze_zpravu_o_orezani(self):
+        self._schvalena_dovolena()
+        self.client.force_login(self.radovy.user)
+        response = self.client.post(reverse("leaves:nova_zadost"), {
+            "typ": self.nemoc.pk, "datum_od": "2026-11-04", "datum_do": "2026-11-05",
+        }, follow=True)
+        zpravy = [str(m) for m in response.context["messages"]]
+        self.assertIn("Záznam byl uložen.", zpravy)
+        self.assertIn(
+            "Zkráceno: Dovolená 2. 11. 2026 – 6. 11. 2026 (zrušeno 4. 11. 2026 – 5. 11. 2026).",
+            zpravy,
+        )
+
+    def test_view_odmitne_prekryv_neprednostni_zadosti(self):
+        self._schvalena_dovolena()
+        self.client.force_login(self.radovy.user)
+        response = self.client.post(reverse("leaves:nova_zadost"), {
+            "typ": self.studijni.pk, "datum_od": "2026-11-04", "datum_do": "2026-11-04",
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "časově překrývá")
+        self.assertFalse(ZadostOStav.objects.filter(typ=self.studijni).exists())
+
+    def test_zruseni_nedotcenych_dnu_zustane_cekat_a_jde_schvalit(self):
+        dovolena = self._schvalena_dovolena()
+        zruseni = dovolena.zrus_nepritomnost(self.PO, self.PO)
+        mail.outbox.clear()
+
+        self._uloz(self.nemoc, self.ST, self.CT)
+
+        zruseni.refresh_from_db()
+        self.assertEqual(zruseni.stav, ZadostOZruseni.Stav.CEKA)
+        zruseni.schval(self.vedouci)
+        self.assertEqual(
+            self._rozsahy(self.dovolena, ZadostOStav.Stav.SCHVALENO),
+            [(self.UT, self.UT), (self.PA, self.PA)],
+        )
+
+    def test_zruseni_dnu_prenesenych_do_jine_casti_se_uzavre(self):
+        dovolena = self._schvalena_dovolena()
+        zruseni = dovolena.zrus_nepritomnost(self.PA, self.PA)
+        self._uloz(self.nemoc, self.ST, self.ST)
+        # Původní žádost zůstala jen Po–Út, pátek je už v jiné žádosti.
+        zruseni.refresh_from_db()
+        self.assertEqual(zruseni.stav, ZadostOZruseni.Stav.ZAMITNUTO)
+
+    def test_zruseni_dnu_vyriznutych_nemoci_se_uzavre(self):
+        dovolena = self._schvalena_dovolena()
+        zruseni = dovolena.zrus_nepritomnost(self.ST, self.CT)
+        self._uloz(self.nemoc, self.ST, self.ST)
+        zruseni.refresh_from_db()
+        self.assertEqual(zruseni.stav, ZadostOZruseni.Stav.ZAMITNUTO)
+
+    def test_vsechny_casti_orezane_zadosti_maji_auditni_poznamku(self):
+        self._schvalena_dovolena()
+        self._uloz(self.nemoc, self.ST, self.CT)
+        casti = ZadostOStav.objects.filter(typ=self.dovolena)
+        self.assertEqual(casti.count(), 2)
+        for cast in casti:
+            self.assertIn("[AUTOMATICKY] Zkráceno kvůli přednostnímu stavu", cast.poznamka_schvalovatele)
+
+    def test_uprava_poznamky_nemoci_nic_neorezava(self):
+        nemoc = self._uloz(self.nemoc, self.ST, self.ST)
+        # Překryv vzniklý mimo validaci (třeba stará data) se při úpravě poznámky nemoci nesmí ořezat.
+        stara = ZadostOStav.objects.create(
+            employee=self.radovy, typ=self.studijni, datum_od=self.ST, datum_do=self.ST,
+        )
+        mail.outbox.clear()
+        nemoc.poznamka_zamestnance = "bolí hlava"
+        nemoc.save()
+        stara.refresh_from_db()
+        self.assertEqual(stara.stav, ZadostOStav.Stav.CEKA)
+        self.assertEqual(mail.outbox, [])

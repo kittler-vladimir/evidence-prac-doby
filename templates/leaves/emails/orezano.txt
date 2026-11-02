@@ -1,0 +1,8 @@
+{% if pro_schvalovatele %}Dobrý den {{ zadost.schvalovatele.jmeno }},
+
+žádost zaměstnance {{ zadost.employee.jmeno }} o {{ zadost.typ.nazev|lower }} ({{ orezani.puvodni_rozsah }}){% else %}Dobrý den {{ zadost.employee.jmeno }},
+
+Vaše žádost o {{ zadost.typ.nazev|lower }} ({{ orezani.puvodni_rozsah }}){% endif %} byla automaticky {% if orezani.cela %}zrušena{% else %}zkrácena (zrušeno: {{ orezani.zruseny_rozsah }}){% endif %}, protože se překrývá se stavem „{{ orezani.prednostni.typ.nazev }}“ ({{ orezani.prednostni.popis_rozsahu }}), který má přednost.
+{% if orezani.hodiny %}Do zůstatku se vrátilo {{ orezani.hodiny }} h.
+{% endif %}
+-- Evidence pracovní doby
