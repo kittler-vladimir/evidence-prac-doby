@@ -8,7 +8,7 @@ from django.utils import timezone
 
 from accounts.models import Employee
 
-from .models import TypStavu, ZadostOStav, ZadostOZruseni, ZustatekStavu
+from .models import TypStavu, ZadostOStav, ZadostOZruseni, ZustatekStavu, zadost_orezana
 
 
 def _posli_email(subject: str, template: str, context: dict, recipients: list[str]):
@@ -163,4 +163,25 @@ def notifikace_zruseni(sender, instance, created, **kwargs):
             template="leaves/emails/zruseni_zamitnuto.txt",
             context=kontext,
             recipients=[zadost.employee.email],
+        )
+
+
+@receiver(zadost_orezana)
+def notifikace_orezani(sender, orezani, **kwargs):
+    """Přednostní žádost (nemoc, OČR) zkrátila nebo zrušila jinou žádost (#120): e-mail
+    dostane zaměstnanec a schvalovatel zkrácené žádosti (je-li to někdo jiný)."""
+    zadost = orezani.zadost
+    prijemci = [(zadost.employee.email, False)]
+    schvalovatel = zadost.schvalovatele
+    if schvalovatel and schvalovatel.pk != zadost.employee_id:
+        prijemci.append((schvalovatel.email, True))
+    for email, pro_schvalovatele in prijemci:
+        _posli_email(
+            subject=(
+                f"Žádost o {zadost.typ.nazev.lower()} byla "
+                f"{'zrušena' if orezani.cela else 'zkrácena'} – {zadost.employee.jmeno}"
+            ),
+            template="leaves/emails/orezano.txt",
+            context={"orezani": orezani, "zadost": zadost, "pro_schvalovatele": pro_schvalovatele},
+            recipients=[email] if email else [],
         )

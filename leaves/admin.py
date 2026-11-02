@@ -16,11 +16,11 @@ class TypStavuAdmin(admin.ModelAdmin):
     list_display = [
         "zkratka", "nazev", "je_pritomnost", "vyzaduje_schvaleni",
         "odecita_ze_zustatku", "je_indispozicni_volno", "je_dovolena",
-        "umoznuje_zadani_po_hodinach",
+        "umoznuje_zadani_po_hodinach", "ma_prednost",
         "kategorie_pro_prehled", "aktivni",
     ]
     list_editable = ["aktivni"]
-    list_filter = ["kategorie_pro_prehled", "je_pritomnost", "vyzaduje_schvaleni"]
+    list_filter = ["kategorie_pro_prehled", "je_pritomnost", "vyzaduje_schvaleni", "ma_prednost"]
 
 
 @admin.register(NarokIndispozicnihoVolna)
@@ -57,6 +57,11 @@ class ZadostOStavAdmin(admin.ModelAdmin):
     # Schvalování/zamítání jde jen přes akce níže.
     readonly_fields = ["pocet_hodin", "stav", "schvaleno_kym", "schvaleno_kdy", "vytvoreno", "upraveno"]
     actions = ["schvalit_zadosti", "zamitnout_zadosti"]
+
+    def save_model(self, request, obj, form, change):
+        super().save_model(request, obj, form, change)
+        for orezani in obj.orezani:  # přednostní stav ořízl překrývající se žádosti (#120)
+            self.message_user(request, orezani.zprava, level=messages.WARNING)
 
     @admin.action(description=_("Schválit vybrané žádosti"))
     def schvalit_zadosti(self, request, queryset):

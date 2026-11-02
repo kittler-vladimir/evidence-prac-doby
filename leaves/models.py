@@ -1,10 +1,24 @@
+from dataclasses import dataclass
 from datetime import datetime, time, timedelta
 from decimal import Decimal
 
 from django.db import models, transaction
+from django.dispatch import Signal
 from django.utils.translation import gettext_lazy as _
 from django.core.exceptions import ValidationError
 from django.utils import timezone
+
+# Přednostní žádost (TypStavu.ma_prednost) ořízla jinou žádost (#120) — signál nese
+# `Orezani`, `leaves/signals.py` z něj posílá e-maily.
+zadost_orezana = Signal()
+
+
+def _den(d):
+    return f"{d.day}. {d.month}. {d.year}"
+
+
+def _popis_dnu(od, do):
+    return _den(od) if od == do else f"{_den(od)} – {_den(do)}"
 
 
 class TypStavu(models.Model):
@@ -77,6 +91,15 @@ class TypStavu(models.Model):
             "od–do. Ve výchozím stavu je zapnuto jen u dovolené."
         ),
     )
+    ma_prednost = models.BooleanField(
+        _("má přednost"),
+        default=False,
+        help_text=_(
+            "Jen u typů bez schvalování (nemoc, OČR). Uložení takové žádosti "
+            "automaticky zkrátí nebo zruší překrývající se žádosti jiných typů "
+            "zaměstnance. Typy s přednostním zápisem se mezi sebou překrývat nesmějí."
+        ),
+    )
     kategorie_pro_prehled = models.CharField(
         _("kategorie pro přehled přítomnosti"),
         max_length=20,
@@ -138,6 +161,13 @@ class TypStavu(models.Model):
                     "Typ, který odečítá ze zůstatku, musí vyžadovat schválení — "
                     "zůstatek se aktualizuje jen při schválení vedoucím "
                     "(ZadostOStav.schval()), samo-záznam ho nikdy neupraví."
+                )
+            )
+        if self.ma_prednost and self.vyzaduje_schvaleni:
+            raise ValidationError(
+                _(
+                    "Typ s přednostním zápisem nesmí vyžadovat schválení — musí platit "
+                    "hned po uložení, aby mohl zkrátit překrývající se žádosti."
                 )
             )
 
@@ -248,6 +278,26 @@ class ZustatekStavu(models.Model):
         return self.narok_hodin - self.cerpano_hodin
 
 
+@dataclass
+class Orezani:
+    """Co přednostní žádost udělala s jednou překrytou žádostí (#120): `zadost` je překrytá
+    žádost po zásahu, `puvodni_rozsah` její rozsah předtím, `zruseny_rozsah` zrušené dny
+    (prázdné, když šla celá pryč), `hodiny` kolik hodin se vrátilo do zůstatku."""
+    zadost: "ZadostOStav"
+    prednostni: "ZadostOStav"
+    puvodni_rozsah: str
+    zruseny_rozsah: str
+    cela: bool
+    hodiny: Decimal
+
+    @property
+    def zprava(self):
+        typ = self.zadost.typ.nazev
+        if self.cela:
+            return f"Zrušeno: {typ} {self.puvodni_rozsah}."
+        return f"Zkráceno: {typ} {self.puvodni_rozsah} (zrušeno {self.zruseny_rozsah})."
+
+
 class ZadostOStav(models.Model):
     """
     Žádost o stav (typy s vyzaduje_schvaleni=True, např. dovolená,
@@ -317,6 +367,9 @@ class ZadostOStav(models.Model):
     vytvoreno = models.DateTimeField(_("vytvořeno"), auto_now_add=True)
     upraveno = models.DateTimeField(_("upraveno"), auto_now=True)
 
+    # Co `save()` přednostní žádosti ořízlo (list `Orezani`) — pro zprávu ve view/adminu.
+    orezani = ()
+
     class Meta:
         verbose_name = _("žádost o stav")
         verbose_name_plural = _("žádosti o stav")
@@ -339,19 +392,14 @@ class ZadostOStav(models.Model):
 
     def popis_rozsahu(self):
         """Rozsah žádosti pro hlášky, např. „12. 10. 2026 9:00–11:30“."""
-        def den(d):
-            return f"{d.day}. {d.month}. {d.year}"
-
         def cas(t):
             return f"{t.hour}:{t.minute:02d}"
 
         if not self.je_po_hodinach:
-            if self.datum_od == self.datum_do:
-                return den(self.datum_od)
-            return f"{den(self.datum_od)} – {den(self.datum_do)}"
+            return _popis_dnu(self.datum_od, self.datum_do)
         if self.datum_od == self.datum_do:
-            return f"{den(self.datum_od)} {cas(self.cas_od)}–{cas(self.cas_do)}"
-        return f"{den(self.datum_od)} {cas(self.cas_od)} – {den(self.datum_do)} {cas(self.cas_do)}"
+            return f"{_den(self.datum_od)} {cas(self.cas_od)}–{cas(self.cas_do)}"
+        return f"{_den(self.datum_od)} {cas(self.cas_od)} – {_den(self.datum_do)} {cas(self.cas_do)}"
 
     def hodiny_po_dnech(self, svatky=None):
         """Minuty dovolené po jednotlivých dnech rozsahu: `{datum: minuty}` jen pro dny
@@ -427,8 +475,9 @@ class ZadostOStav(models.Model):
 
     def _zkontroluj_hodinovou_zadost(self):
         """Pravidla hodinové dovolené (#82): čas od i do zároveň, jen u typů s příznakem,
-        pružná doba jen v rámci jednoho dne, aspoň jeden započítaný den, žádné časové
-        překryvy s jinou žádostí a součet za den do denní normy."""
+        pružná doba jen v rámci jednoho dne, aspoň jeden započítaný den a součet za den
+        do denní normy. Platí pro všechny žádosti (#120): žádný překryv s jinou žádostí
+        zaměstnance — společný započítaný den u celých dnů, časový průnik u hodinových."""
         from accounts.models import TypUvazku
 
         if (self.cas_od is None) != (self.cas_do is None):
@@ -460,27 +509,20 @@ class ZadostOStav(models.Model):
         if po_hodinach and not dny:
             raise ValidationError(_("V zadaném rozsahu není žádný pracovní den."))
 
-        ostatni = list(
-            ZadostOStav.objects.filter(
-                employee_id=self.employee_id,
-                stav__in=[self.Stav.CEKA, self.Stav.SCHVALENO],
-                datum_od__lte=self.datum_do,
-                datum_do__gte=self.datum_od,
-            ).exclude(pk=self.pk).select_related("typ", "employee__typ_uvazku")
-        )
-        # Kolize hlídáme jen tam, kde je aspoň jedna ze žádostí hodinová — překryv
-        # dvou žádostí na celé dny se dosud nehlídá.
-        moje_intervaly = self.intervaly_po_dnech()
-        for jina in ostatni:
-            if not (po_hodinach or jina.je_po_hodinach):
+        ostatni = self._ostatni_aktivni_zadosti()
+        # Přednostní typ (nemoc, OČR) překrytou žádost nikdy neodmítne — `save()` ji ořízne
+        # (#120). Odmítne se jen střet s jinou přednostní žádostí.
+        for jina, _dny in self._kolize(ostatni):
+            if self._ma_prednost and not jina.typ.ma_prednost:
                 continue
-            for den, (od2, do2) in jina.intervaly_po_dnech().items():
-                od1, do1 = moje_intervaly.get(den, (0, 0))
-                if od1 < do2 and od2 < do1:
-                    raise ValidationError(
-                        _("Žádost se časově překrývá s jinou žádostí: %(typ)s, %(rozsah)s.")
-                        % {"typ": jina.typ.nazev, "rozsah": jina.popis_rozsahu()}
-                    )
+            zprava = (
+                _("Žádost se překrývá se stavem s přednostním zápisem: %(typ)s, %(rozsah)s.")
+                if jina.typ.ma_prednost
+                else _("Žádost se časově překrývá s jinou žádostí: %(typ)s, %(rozsah)s.")
+            )
+            raise ValidationError(
+                zprava % {"typ": jina.typ.nazev, "rozsah": jina.popis_rozsahu()}
+            )
 
         if po_hodinach:
             typ_uvazku = self.employee.typ_uvazku
@@ -491,6 +533,135 @@ class ZadostOStav(models.Model):
                         _("Součet dovolené za %(den)s by překročil denní normu.")
                         % {"den": f"{den.day}. {den.month}. {den.year}"}
                     )
+
+    @property
+    def _ma_prednost(self):
+        return bool(self.typ_id and self.typ.ma_prednost)
+
+    def _ostatni_aktivni_zadosti(self):
+        """Ostatní čekající a schválené žádosti zaměstnance, které kalendářně zasahují do
+        rozsahu této žádosti (zamítnuté a stornované se nepočítají)."""
+        return list(
+            ZadostOStav.objects.filter(
+                employee_id=self.employee_id,
+                stav__in=[self.Stav.CEKA, self.Stav.SCHVALENO],
+                datum_od__lte=self.datum_do,
+                datum_do__gte=self.datum_od,
+            ).exclude(pk=self.pk).select_related("typ", "employee__typ_uvazku")
+        )
+
+    def _kolize(self, ostatni):
+        """`[(jiná žádost, [společné započítané dny])]` pro žádosti z `ostatni`, které se s
+        touto překrývají: ve společném započítaném dni se kříží jejich časová okna
+        (celý den = 0–1440). Dny bez započítání (víkend, svátek) kolizi nezpůsobí."""
+        moje_intervaly = self.intervaly_po_dnech()
+        kolize = []
+        for jina in ostatni:
+            dny = []
+            for den, (od2, do2) in jina.intervaly_po_dnech().items():
+                od1, do1 = moje_intervaly.get(den, (0, 0))
+                if od1 < do2 and od2 < do1:
+                    dny.append(den)
+            if dny:
+                kolize.append((jina, dny))
+        return kolize
+
+    def _orizni_kolizni_zadosti(self):
+        """Přednostní žádost (#120) zkrátí nebo zruší překrývající se nepřednostní žádosti
+        zaměstnance. Celodenní žádost se ořízne o průnik rozsahů (jako `zrus()`), hodinová
+        se zruší celá. Volá se z `save()` uvnitř transakce; vrací seznam `Orezani`."""
+        orezani = []
+        for jina, _dny in self._kolize(self._ostatni_aktivni_zadosti()):
+            if jina.typ.ma_prednost:
+                continue  # přednostní vs přednostní odmítá clean()
+            puvodni_rozsah = jina.popis_rozsahu()
+            if jina.je_po_hodinach:
+                od, do = jina.datum_od, jina.datum_do
+            else:
+                od = max(jina.datum_od, self.datum_od)
+                do = min(jina.datum_do, self.datum_do)
+            cela = (od, do) == (jina.datum_od, jina.datum_do)
+
+            # Poznámka se nastaví před zásahem — `zrus()` i `_orizni_cekajici()` ji uloží
+            # a opíšou do všech zbylých částí.
+            poznamka = (
+                f"[AUTOMATICKY] {'Zrušeno' if cela else 'Zkráceno'} kvůli přednostnímu stavu "
+                f"{self.typ.nazev} ({self.popis_rozsahu()})."
+            )
+            jina.poznamka_schvalovatele = f"{jina.poznamka_schvalovatele}\n{poznamka}".strip()
+
+            if jina.stav == self.Stav.SCHVALENO:
+                vraceno = jina.zrus(od, do)
+            else:
+                jina._orizni_cekajici(od, do)
+                vraceno = Decimal("0")
+            jina._uzavri_neplatna_zruseni()
+
+            orezani.append(Orezani(
+                zadost=jina, prednostni=self, puvodni_rozsah=puvodni_rozsah,
+                zruseny_rozsah="" if cela else _popis_dnu(od, do),
+                cela=cela, hodiny=vraceno,
+            ))
+        return orezani
+
+    def _zbytky_po_zruseni(self, od, do):
+        """Části žádosti na celé dny, které zbydou po vyříznutí dnů od–do — nepřeuložené
+        `ZadostOStav` před a po rozsahu, jen ty s aspoň jedním započítaným dnem."""
+        useky = []
+        if (od, do) != (self.datum_od, self.datum_do):
+            for a, b in (
+                (self.datum_od, od - timedelta(days=1)),
+                (do + timedelta(days=1), self.datum_do),
+            ):
+                if a > b:
+                    continue
+                cast = ZadostOStav(
+                    employee=self.employee, typ=self.typ, datum_od=a, datum_do=b,
+                )
+                cast.vypocitej_hodiny()
+                if cast.pocet_hodin > 0:
+                    useky.append(cast)
+        return useky
+
+    def _orizni_cekajici(self, od, do):
+        """Vyřízne dny od–do z čekající žádosti (#120) — bez schvalování a beze změny
+        zůstatku (čekající žádost nic neodečetla). Celá pryč → `stornovano`, jinak se
+        zkrátí na první zbylou část a další část vznikne jako nová čekající žádost."""
+        useky = self._zbytky_po_zruseni(od, do)
+        if not useky:
+            self.stav = self.Stav.STORNOVÁNO
+            self.save()
+            return
+        prvni, *dalsi = useky
+        self.datum_od, self.datum_do = prvni.datum_od, prvni.datum_do
+        self.pocet_hodin = prvni.pocet_hodin
+        self.save()
+        for cast in dalsi:
+            cast.schvalovatele = self.schvalovatele
+            cast.poznamka_zamestnance = self.poznamka_zamestnance
+            cast.poznamka_schvalovatele = self.poznamka_schvalovatele
+            cast._bez_notifikace = True  # není to nová žádost k vyřízení
+            cast.save()
+            ZadostOStav.objects.filter(pk=cast.pk).update(vytvoreno=self.vytvoreno)
+
+    def _uzavri_neplatna_zruseni(self):
+        """Po oříznutí (#120) zamítne čekající žádosti o zrušení, které už nemají smysl:
+        žádost byla celá zrušena, nebo jejich rozsah neleží celý v dnech, které zbyly
+        (vyříznuté dny jsou pryč, zbylé části mohly přejít do nových žádostí). Zamítá se
+        queryset updatem, aby nešel e-mail „zrušení zamítnuto“. Žádosti o zrušení dnů,
+        které zůstaly, se nechají být."""
+        cekajici = self.zadosti_o_zruseni.filter(stav=ZadostOZruseni.Stav.CEKA)
+        if self.stav == self.Stav.SCHVALENO:
+            cekajici = cekajici.exclude(
+                datum_od__gte=self.datum_od, datum_do__lte=self.datum_do,
+            )
+        cekajici.update(
+            stav=ZadostOZruseni.Stav.ZAMITNUTO,
+            schvaleno_kdy=timezone.now(),
+            poznamka_schvalovatele=(
+                "Automaticky uzavřeno: žádost byla zkrácena nebo zrušena přednostním stavem."
+            ),
+        )
 
     @classmethod
     def hodinove_volno_minuty(cls, employee, datum, useky_prace=(), useky_pohybu=()):
@@ -660,25 +831,12 @@ class ZadostOStav(models.Model):
         """Provede zrušení schválené žádosti: celé (stav `stornovano`), nebo jen dny od–do
         vícedenní žádosti na celé dny — ta se rozdělí na zbylé schválené části před a po.
         Hodiny zrušené části se vrátí do zůstatku (jen u typů, kterým je `schval()` odečetl).
-        Vrací počet vrácených hodin."""
+        Vrací počet hodin, které se do zůstatku skutečně vrátily (0, když se nevracelo)."""
         od, do = self._zkontroluj_zruseni(od, do)
         with transaction.atomic():
             puvodni_hodiny = self.pocet_hodin
             rok = self.datum_od.year
-            useky = []
-            if (od, do) != (self.datum_od, self.datum_do):
-                for a, b in (
-                    (self.datum_od, od - timedelta(days=1)),
-                    (do + timedelta(days=1), self.datum_do),
-                ):
-                    if a > b:
-                        continue
-                    cast = ZadostOStav(
-                        employee=self.employee, typ=self.typ, datum_od=a, datum_do=b,
-                    )
-                    cast.vypocitej_hodiny()
-                    if cast.pocet_hodin > 0:
-                        useky.append(cast)
+            useky = self._zbytky_po_zruseni(od, do)
 
             if not useky:
                 self.stav = self.Stav.STORNOVÁNO
@@ -706,14 +864,17 @@ class ZadostOStav(models.Model):
                     )
                 vratit = puvodni_hodiny - sum(c.pocet_hodin for c in useky)
 
+            vraceno = Decimal("0")
             if vratit > 0 and self.typ.vyzaduje_schvaleni and self.typ.odecita_ze_zustatku:
                 zustatek = ZustatekStavu.objects.filter(
                     employee=self.employee, rok=rok, typ=self.typ
                 ).first()
                 if zustatek:
-                    zustatek.cerpano_hodin = max(zustatek.cerpano_hodin - vratit, 0)
+                    puvodne_cerpano = zustatek.cerpano_hodin
+                    zustatek.cerpano_hodin = max(puvodne_cerpano - vratit, 0)
                     zustatek.save()
-        return vratit
+                    vraceno = puvodne_cerpano - zustatek.cerpano_hodin
+        return vraceno
 
     def muze_schvalit_sam(self, employee):
         """Smí `employee` schválit tuto žádost sám sobě (#90)? Jen vlastní čekající žádost
@@ -770,10 +931,14 @@ class ZadostOStav(models.Model):
     def save(self, *args, **kwargs):
         je_novy = self.pk is None
         puvodni_stav = None
+        puvodni_rozsah = None
         if not je_novy:
-            puvodni_stav = (
-                ZadostOStav.objects.filter(pk=self.pk).values_list("stav", flat=True).first()
-            )
+            puvodni = ZadostOStav.objects.filter(pk=self.pk).values(
+                "stav", "typ_id", "datum_od", "datum_do", "cas_od", "cas_do",
+            ).first()
+            if puvodni:
+                puvodni_stav = puvodni.pop("stav")
+                puvodni_rozsah = puvodni
 
         # Přepočítat hodiny před uložením pokud je potřeba
         if not self.pocet_hodin and self.datum_od and self.datum_do:
@@ -795,7 +960,25 @@ class ZadostOStav(models.Model):
         # jinak viděl hodnotu z předchozího uložení.
         self._stav_se_zmenil = je_novy or puvodni_stav != self.stav
 
-        super().save(*args, **kwargs)
+        # Platná přednostní žádost (nemoc, OČR) ořízne překrývající se žádosti (#120) —
+        # v jedné transakci s vlastním uložením, aby se při selhání nic neuložilo. Jen když
+        # je nová nebo se změnil její stav, typ či rozsah (ne při úpravě poznámky).
+        zmena = je_novy or puvodni_stav != self.stav or puvodni_rozsah != {
+            "typ_id": self.typ_id, "datum_od": self.datum_od, "datum_do": self.datum_do,
+            "cas_od": self.cas_od, "cas_do": self.cas_do,
+        }
+        orezava = (
+            zmena and self._ma_prednost and self.stav == self.Stav.SCHVALENO
+            and self.employee_id and self.datum_od and self.datum_do
+        )
+        if not orezava:
+            super().save(*args, **kwargs)
+            return
+        with transaction.atomic():
+            super().save(*args, **kwargs)
+            self.orezani = self._orizni_kolizni_zadosti()
+        for orezani in self.orezani:
+            zadost_orezana.send(sender=ZadostOStav, orezani=orezani)
 
 
 class ZadostOZruseni(models.Model):
@@ -860,12 +1043,7 @@ class ZadostOZruseni(models.Model):
         return self.datum_od < timezone.localdate()
 
     def popis_rozsahu(self):
-        def den(d):
-            return f"{d.day}. {d.month}. {d.year}"
-
-        if self.datum_od == self.datum_do:
-            return den(self.datum_od)
-        return f"{den(self.datum_od)} – {den(self.datum_do)}"
+        return _popis_dnu(self.datum_od, self.datum_do)
 
     def muze_schvalit_sam(self, employee):
         """Smí `employee` schválit zrušení vlastní žádosti sám (stejná pravidla jako #90)?"""
