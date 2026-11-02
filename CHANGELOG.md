@@ -2,6 +2,10 @@
 
 Přehled změn, které uživatelé v aplikaci uvidí. Nejnovější nahoře; číslo v závorce odkazuje na issue na GitHubu.
 
+## 2. 11. 2026
+
+- Žádosti o stav (dovolená, volno, home office) se už nemohou překrývat. Systém upozorní, který stav koliduje (#120)
+
 ## 27. 10. 2026
 
 - Ve výkazu, v přehledu odboru i v exportu do Excelu teď vidíte dovolenou, nemoc a další nepřítomnosti (#117)
