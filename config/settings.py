@@ -1,6 +1,8 @@
 import environ
 from pathlib import Path
 
+from .verze import precti_verzi
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 env = environ.Env(DEBUG=(bool, False))
@@ -52,12 +54,17 @@ TEMPLATES = [
                 "django.template.context_processors.request",
                 "django.contrib.auth.context_processors.auth",
                 "django.contrib.messages.context_processors.messages",
+                "config.context_processors.verze_aplikace",
             ],
         },
     },
 ]
 
 WSGI_APPLICATION = "config.wsgi.application"
+
+# Verze aplikace (soubor VERSION v kořeni repa, zvyšuje se v PR) a přehled změn pro uživatele.
+VERZE_APLIKACE = precti_verzi(BASE_DIR / "VERSION")
+CHANGELOG_SOUBOR = BASE_DIR / "CHANGELOG.md"
 
 if env("DB_ENGINE", default="postgresql") == "sqlite":
     DATABASES = {

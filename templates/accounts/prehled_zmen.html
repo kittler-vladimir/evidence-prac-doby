@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Přehled změn{% endblock %}
+
+{% block content %}
+<h4 class="mb-3"><i class="bi bi-journal-text"></i> Přehled změn – verze {{ verze_aplikace }}</h4>
+
+{% if dny is None %}
+<p class="text-muted">Přehled změn není k dispozici.</p>
+{% else %}
+{% for den in dny %}
+<h5 class="mt-4">{{ den.nadpis }}</h5>
+<ul>
+  {% for polozka in den.polozky %}
+  <li>{{ polozka }}</li>
+  {% endfor %}
+</ul>
+{% empty %}
+<p class="text-muted">Zatím tu nejsou žádné změny.</p>
+{% endfor %}
+{% endif %}
+{% endblock %}

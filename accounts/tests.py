@@ -504,3 +504,87 @@ class PridatZamestnanceTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertFalse(Employee.objects.filter(osobni_cislo="N1").exists())
         self.assertEqual(User.objects.filter(email="vedouci@example.com").count(), 1)
+
+
+class VerzeAplikaceTests(TestCase):
+    """Issue #124 — verze v patičce a přehled změn z CHANGELOG.md."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="verze124@example.com", email="verze124@example.com", password="test12345",
+        )
+
+    def _soubor(self, nazev, obsah):
+        import tempfile
+        from pathlib import Path
+
+        adresar = tempfile.TemporaryDirectory()
+        self.addCleanup(adresar.cleanup)
+        cesta = Path(adresar.name) / nazev
+        cesta.write_bytes(obsah.encode("utf-8"))
+        return cesta
+
+    def test_paticka_anonyma_ma_verzi_bez_odkazu(self):
+        with self.settings(VERZE_APLIKACE="1.2.3"):
+            odpoved = self.client.get(reverse("accounts:login"))
+        self.assertEqual(odpoved.status_code, 200)
+        self.assertContains(odpoved, "Verze 1.2.3")
+        self.assertNotContains(odpoved, reverse("accounts:prehled_zmen"))
+
+    def test_paticka_prihlaseneho_je_odkaz_na_prehled_zmen(self):
+        self.client.force_login(self.user)
+        with self.settings(VERZE_APLIKACE="1.2.3"):
+            odpoved = self.client.get(reverse("accounts:home"))
+        self.assertContains(odpoved, f'href="{reverse("accounts:prehled_zmen")}"')
+        self.assertContains(odpoved, "Verze 1.2.3</a>")
+
+    def test_prehled_zmen_vyzaduje_prihlaseni(self):
+        odpoved = self.client.get(reverse("accounts:prehled_zmen"))
+        self.assertEqual(odpoved.status_code, 302)
+        self.assertIn(reverse("accounts:login"), odpoved["Location"])
+
+    def test_prehled_zmen_ukaze_dny_a_polozky_a_escapuje_html(self):
+        cesta = self._soubor(
+            "CHANGELOG.md",
+            "# Změny\r\n\r\nÚvodní text\r\n\r\n## 25. 11. 2026\r\n\r\n"
+            "- Nová věc <b>x</b> (#123)\r\n- Druhá věc (#124)\r\n\r\n## 2. 11. 2026\r\n\r\n- Starší (#120)\r\n",
+        )
+        self.client.force_login(self.user)
+        with self.settings(CHANGELOG_SOUBOR=cesta, VERZE_APLIKACE="1.2.3"):
+            odpoved = self.client.get(reverse("accounts:prehled_zmen"))
+        self.assertContains(odpoved, "Přehled změn – verze 1.2.3")
+        self.assertContains(odpoved, "25. 11. 2026")
+        self.assertContains(odpoved, "Nová věc &lt;b&gt;x&lt;/b&gt; (#123)")
+        self.assertNotContains(odpoved, "<b>x</b>")
+        self.assertNotContains(odpoved, "Úvodní text")
+        self.assertEqual(
+            [(d["nadpis"], len(d["polozky"])) for d in odpoved.context["dny"]],
+            [("25. 11. 2026", 2), ("2. 11. 2026", 1)],
+        )
+
+    def test_chybejici_changelog_ukaze_hlasku(self):
+        self.client.force_login(self.user)
+        with self.settings(CHANGELOG_SOUBOR="/neexistuje/CHANGELOG.md"):
+            odpoved = self.client.get(reverse("accounts:prehled_zmen"))
+        self.assertEqual(odpoved.status_code, 200)
+        self.assertContains(odpoved, "Přehled změn není k dispozici.")
+
+    def test_precti_verzi_toleruje_chybejici_prazdny_i_okrajovy_soubor(self):
+        from config.verze import precti_verzi
+
+        self.assertEqual(precti_verzi("/neexistuje/VERSION"), "neznámá")
+        self.assertEqual(precti_verzi(self._soubor("VERSION", "")), "neznámá")
+        self.assertEqual(precti_verzi(self._soubor("VERSION", "  \n")), "neznámá")
+        self.assertEqual(precti_verzi(self._soubor("VERSION", "  2.0.1 \n")), "2.0.1")
+
+    def test_verze_v_repu_je_platne_cislo_a_changelog_jde_precist(self):
+        import re
+
+        from django.conf import settings
+
+        from config.verze import nacti_zmeny
+
+        self.assertRegex(settings.VERZE_APLIKACE, r"^\d+\.\d+\.\d+$")
+        dny = nacti_zmeny(settings.CHANGELOG_SOUBOR)
+        self.assertTrue(dny and dny[0]["polozky"])
+        self.assertTrue(all(re.search(r"\d{4}$", d["nadpis"]) for d in dny))
