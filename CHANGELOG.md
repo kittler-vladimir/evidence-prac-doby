@@ -2,6 +2,10 @@
 
 Přehled změn, které uživatelé v aplikaci uvidí. Nejnovější nahoře; číslo v závorce odkazuje na issue na GitHubu.
 
+## 25. 11. 2026
+
+- Správce v přehledu odboru po kliknutí na jméno zaměstnance uvidí jeho příchody, pohyby a stavy za zvolený měsíc. (#123)
+
 ## 2. 11. 2026
 
 - Žádosti o stav (dovolená, volno, home office) se už nemohou překrývat. Systém upozorní, který stav koliduje (#120)
