@@ -1,0 +1,8 @@
+{# Jak se pohyb počítá do pracovní doby — kontext: zapocitani (TypPohybu.Zapocitani). #}
+{% if zapocitani == "ANO" %}
+  <span class="badge bg-success">Ano</span>
+{% elif zapocitani == "JADRO" %}
+  <span class="badge bg-warning text-dark">Jen v jádrové době</span>
+{% else %}
+  <span class="badge bg-secondary">Ne</span>
+{% endif %}
