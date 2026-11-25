@@ -1,8 +1,11 @@
+from django.conf import settings
 from django.contrib.auth import views as auth_views
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib import messages
 from django.urls import reverse_lazy
+
+from config.verze import nacti_zmeny
 
 from .models import Employee, Oddeleni, Odbor, Sekce, TypUvazku
 from .forms import EmployeeCreateForm, EmployeeUpdateForm, PresunutiForm, ZastupceForm
@@ -27,6 +30,14 @@ class LogoutView(auth_views.LogoutView):
 @login_required
 def home(request):
     return render(request, "accounts/home.html")
+
+
+@login_required
+def prehled_zmen(request):
+    """Přehled změn aplikace (CHANGELOG.md) — odkaz z verze v patičce (#124)."""
+    return render(request, "accounts/prehled_zmen.html", {
+        "dny": nacti_zmeny(settings.CHANGELOG_SOUBOR),
+    })
 
 
 # ---------------------------------------------------------------------------
