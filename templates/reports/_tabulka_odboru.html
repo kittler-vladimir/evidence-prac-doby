@@ -20,7 +20,7 @@
   <tbody>
     {% for d in radky %}
     <tr>
-      <td>{{ d.employee.jmeno }}</td>
+      <td>{% if user.is_staff %}<a href="{% url 'reports:detail_zamestnance' d.employee.pk %}{{ obdobi.url_tohoto_mesice }}" title="Záznamy, pohyby a stavy za {{ obdobi.nazev }}">{{ d.employee.jmeno }}</a>{% else %}{{ d.employee.jmeno }}{% endif %}</td>
       <td>{{ d.odpracovano_h }}h {{ d.odpracovano_m }}min</td>
       <td>{{ d.prescas_minuty|minuty_hm }}</td>
       <td>{{ d.nedostatek_minuty|minuty_hm }}</td>

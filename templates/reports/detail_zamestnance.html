@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% load timetracking_extras %}
+{% block title %}{{ employee.jmeno }} – detail za měsíc{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-start mb-3 flex-wrap gap-2">
+  <div>
+    <h4 class="mb-1"><i class="bi bi-person-lines-fill"></i> {{ employee.jmeno }} – {{ obdobi.nazev }}</h4>
+    <div class="text-muted small">
+      {{ employee.oddeleni.nazev }} · {{ employee.oddeleni.odbor.nazev }}
+      · {{ employee.typ_uvazku.nazev }} ({{ employee.typ_uvazku.get_druh_pracovni_doby_display }})
+    </div>
+  </div>
+  <a href="{{ url_odboru }}" class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-left"></i> Zpět na přehled odboru
+  </a>
+</div>
+
+{% include "timetracking/_vyber_mesice.html" %}
+
+{% if not dny %}
+<p class="text-center text-muted py-3">V tomto měsíci nejsou žádné záznamy.</p>
+{% else %}
+<div class="card shadow-sm">
+  <div class="table-responsive">
+    <table class="table table-hover mb-0 align-top">
+      <thead class="table-light">
+        <tr>
+          <th>Datum</th>
+          <th>Pracovní bloky</th>
+          <th>Pohyby</th>
+          <th>Stavy</th>
+          <th>Odpracováno</th>
+          <th>Bilance</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for d in dny %}
+        <tr {% if d.je_svatek or d.je_vikend %}class="table-secondary"{% endif %}>
+          <td class="text-nowrap">
+            {{ d.datum|date:"j. n. Y (D)" }}
+            {% if d.je_svatek %}<span class="badge bg-info">Svátek</span>{% endif %}
+            {% if d.je_vikend %}<span class="badge bg-secondary">Víkend</span>{% endif %}
+          </td>
+          <td>
+            {% for b in d.bloky %}
+            {% if b.mezera_pred %}
+            <div class="text-warning-emphasis small" title="Čas mezi dvěma bloky se do práce nepočítá">
+              <i class="bi bi-exclamation-triangle"></i>
+              mezera {{ b.mezera_pred.od|time:"H:i" }}–{{ b.mezera_pred.do|time:"H:i" }} ({{ b.mezera_pred.minuty|minuty_hm }})
+            </div>
+            {% endif %}
+            <div>
+              {{ b.session.zacatek|time:"H:i" }}–{% if b.session.konec %}{{ b.session.konec|time:"H:i" }}{% elif b.probiha %}<span class="badge bg-success">probíhá</span>{% else %}<span class="badge bg-danger">bez odchodu</span>{% endif %}
+              {% if b.k_oprave %}<span class="badge bg-warning text-dark">k opravě</span>{% endif %}
+              {% if b.session.poznamka %}<div class="small text-muted">{{ b.session.poznamka|linebreaksbr }}</div>{% endif %}
+            </div>
+            {% endfor %}
+          </td>
+          <td>
+            {% for p in d.pohyby %}
+            <div>
+              {{ p.pohyb.typ.nazev }}
+              {{ p.pohyb.zacatek|time:"H:i" }}–{% if p.pohyb.konec %}{{ p.pohyb.konec|time:"H:i" }} ({{ p.pohyb.trvani_minut|minuty_hm }}){% elif p.k_oprave %}<span class="badge bg-danger">bez návratu</span>{% else %}<span class="badge bg-success">probíhá</span>{% endif %}
+              {% include "timetracking/_zapocitani_pohybu.html" with zapocitani=p.zapocitani %}
+              {% if p.k_oprave %}<span class="badge bg-warning text-dark">k opravě</span>{% endif %}
+              {% if p.pohyb.poznamka %}<div class="small text-muted">{{ p.pohyb.poznamka|linebreaksbr }}</div>{% endif %}
+            </div>
+            {% endfor %}
+          </td>
+          <td>{% include "timetracking/_nepritomnosti_dne.html" with nepritomnosti=d.nepritomnosti %}</td>
+          <td>{% if d.souhrn %}{{ d.souhrn.odpracovane_minuty|minuty_hm }}{% endif %}</td>
+          <td>
+            {% if d.souhrn and d.souhrn.je_zapocitan %}{{ d.souhrn.prescos_minuty|minuty_hm_znamenko }}
+            {% elif d.souhrn %}<span class="text-muted" title="Den bez uzavřeného bloku se do bilance nepočítá">—</span>{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+        <tr class="bg-white fw-bold text-dark">
+          <td>Měsíc celkem</td>
+          <td colspan="3"></td>
+          <td>{{ celkem_odpr|minuty_hm }}</td>
+          <td>{{ celkem.bilance|minuty_hm_znamenko }}</td>
+        </tr>
+        <tr class="table-light small">
+          <td colspan="4"></td>
+          <td>Přesčas: {{ celkem.prescas|minuty_hm }}</td>
+          <td>Nedostatek: {{ celkem.nedostatek|minuty_hm }}</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

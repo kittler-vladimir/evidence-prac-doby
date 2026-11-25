@@ -4,9 +4,10 @@ from datetime import datetime
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.db.models import Q
-from django.shortcuts import render, redirect
+from django.shortcuts import get_object_or_404, render, redirect
+from django.urls import reverse
 from django.utils import timezone
-from django.http import HttpResponse
+from django.http import HttpResponse, HttpResponseForbidden
 
 from accounts.models import Employee, Odbor, Oddeleni, Sekce, viditelni_zamestnanci
 from timetracking.bilance import format_minut, rozdel_na_tydny, secti
@@ -14,6 +15,7 @@ from timetracking.models import WorkdaySummary
 from timetracking.nepritomnosti import nepritomnosti_za_mesic, radky_souhrnu, radky_vykazu, souhrn_podle_typu, typy_sloupcu
 from timetracking.obdobi import zvolene_obdobi
 from timetracking.opravy import zaznamy_k_oprave
+from .detail import dny_zamestnance
 from .services import NEPRITOMEN, PRITOMEN, stavy_zamestnancu
 
 DELKA_VYHLEDAVACIHO_DOTAZU = 2
@@ -178,6 +180,30 @@ def prehled_tymu(request):
         "skupiny": skupiny, "filtr": filtr, "obdobi": obdobi, "rok": rok, "mesic": mesic,
         "sloupce_nepritomnosti": sloupce,
         "zaznamy_k_oprave": zaznamy_k_oprave(spravovani),
+    })
+
+
+@login_required
+def detail_zamestnance(request, pk):
+    """Detail zaměstnance z přehledu Odbor (#123): po dnech zvoleného měsíce bloky,
+    pohyby, schválené stavy a denní souhrn. Jen pro čtení a jen pro is_staff —
+    vedoucí ho nevidí (odkaz v Odboru se jim nezobrazuje, ruční GET dostane 403)."""
+    if not request.user.is_staff:
+        return HttpResponseForbidden()
+    employee = get_object_or_404(
+        Employee.objects.select_related("user", "typ_uvazku", "oddeleni__odbor__sekce"), pk=pk,
+    )
+    obdobi = zvolene_obdobi(request)
+    dny = dny_zamestnance(employee, obdobi.rok, obdobi.mesic)
+
+    souhrny = [d.souhrn for d in dny if d.souhrn]
+    return render(request, "reports/detail_zamestnance.html", {
+        "employee": employee,
+        "obdobi": obdobi,
+        "dny": dny,
+        "celkem_odpr": sum(s.odpracovane_minuty for s in souhrny),
+        "celkem": secti(souhrny),
+        "url_odboru": reverse("reports:prehled_tymu") + obdobi.url_tohoto_mesice,
     })
 
 

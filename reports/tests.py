@@ -1,14 +1,17 @@
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 
 from django.contrib.auth import get_user_model
+from django.db import connection
 from django.test import Client, TestCase
+from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django.utils import timezone
 
 from accounts.models import Employee, Funkce, Oddeleni, Odbor, Sekce, TypUvazku
 from leaves.models import TypStavu, ZadostOStav
-from timetracking.models import WorkSession, WorkdaySummary
+from timetracking.models import Pohyb, TypPohybu, WorkSession, WorkdaySummary
+from reports.detail import dny_zamestnance
 from reports.services import NEPRITOMEN, PRITOMEN, stav_zamestnance
 
 User = get_user_model()
@@ -497,3 +500,179 @@ class NepritomnostiOdborAExportTestCase(TestCase):
 
         radky = {r[0].value: (r[1].value, r[2].value) for r in self._xlsx_listu().iter_rows(min_row=2) if r[0].value}
         self.assertEqual(radky["DOV – Dovolená"], ("—", "2h 30min"))
+
+
+def _cas(rok, mesic, den, hodina, minuta=0):
+    return timezone.make_aware(datetime(rok, mesic, den, hodina, minuta))
+
+
+class DetailZamestnanceOdboruTestCase(TestCase):
+    """Issue #123 — admin detail zaměstnance z přehledu Odbor."""
+
+    def setUp(self):
+        from timetracking.tests import vytvor_nepritomnosti_rijna_2026, vytvor_zamestnance
+
+        self.zam = vytvor_zamestnance("d123@example.com", "0123")
+        self.typy = vytvor_nepritomnosti_rijna_2026(self.zam)
+        self.lekar = TypPohybu.objects.create(
+            nazev="Lékař", zkratka="LEK", zapocitani_pruzna=TypPohybu.Zapocitani.JADRO,
+        )
+        # Po 5. 10.: Odchod + Příchod u lékaře místo pohybu (mezera 9:42–13:15)
+        WorkSession.objects.create(
+            employee=self.zam, zacatek=_cas(2026, 10, 5, 7, 18), konec=_cas(2026, 10, 5, 9, 42),
+        )
+        WorkSession.objects.create(
+            employee=self.zam, zacatek=_cas(2026, 10, 5, 13, 15), konec=_cas(2026, 10, 5, 16, 28),
+        )
+        # Út 6. 10.: celý den s pohybem Lékař 10:00–11:00
+        blok = WorkSession.objects.create(
+            employee=self.zam, zacatek=_cas(2026, 10, 6, 7, 33), konec=_cas(2026, 10, 6, 16, 53),
+        )
+        Pohyb.objects.create(
+            work_session=blok, typ=self.lekar,
+            zacatek=_cas(2026, 10, 6, 10), konec=_cas(2026, 10, 6, 11),
+        )
+        self.admin = User.objects.create_user(
+            username="admin123@example.com", email="admin123@example.com",
+            password="test12345", is_staff=True,
+        )
+        self.client.force_login(self.admin)
+        self.url = reverse("reports:detail_zamestnance", args=[self.zam.pk])
+
+    def _den(self, odpoved, den):
+        (nalezeny,) = [d for d in odpoved.context["dny"] if d.datum == den]
+        return nalezeny
+
+    def test_detail_ukazuje_bloky_mezeru_pohyb_stavy_a_souhrn(self):
+        odpoved = self.client.get(self.url, {"rok": 2026, "mesic": 10})
+        self.assertEqual(odpoved.status_code, 200)
+
+        pondeli = self._den(odpoved, date(2026, 10, 5))
+        self.assertEqual(len(pondeli.bloky), 2)
+        self.assertIsNone(pondeli.bloky[0].mezera_pred)
+        mezera = pondeli.bloky[1].mezera_pred
+        self.assertEqual(
+            (timezone.localtime(mezera.od).strftime("%H:%M"),
+             timezone.localtime(mezera.do).strftime("%H:%M"), mezera.minuty),
+            ("09:42", "13:15", 213),
+        )
+        self.assertContains(odpoved, "mezera 09:42–13:15 (3h 33min)")
+        self.assertEqual(pondeli.souhrn, WorkdaySummary.objects.get(employee=self.zam, datum=date(2026, 10, 5)))
+
+        utery = self._den(odpoved, date(2026, 10, 6))
+        (pohyb,) = utery.pohyby
+        self.assertEqual(pohyb.pohyb.typ, self.lekar)
+        self.assertEqual(pohyb.zapocitani, TypPohybu.Zapocitani.JADRO)
+        self.assertContains(odpoved, "Jen v jádrové době")
+        self.assertContains(odpoved, "Lékař")
+
+        # stavy z nepritomnosti_za_mesic: dovolená Po–Út 12.–13. 10.
+        (dovolena,) = self._den(odpoved, date(2026, 10, 12)).nepritomnosti
+        self.assertEqual(dovolena.typ, self.typy["dovolena"])
+
+    def test_mesicni_soucet_se_shoduje_s_radkem_v_odboru(self):
+        detail = self.client.get(self.url, {"rok": 2026, "mesic": 10})
+        odbor = self.client.get(reverse("reports:prehled_tymu"), {"rok": 2026, "mesic": 10})
+        radky = [
+            r
+            for s in odbor.context["skupiny"] for o in s["odbory"]
+            for og in o["oddeleni_skupiny"] for r in og["radky"]
+            if r["employee"] == self.zam
+        ]
+        (radek,) = radky
+        self.assertEqual(detail.context["celkem"].prescas, radek["prescas_minuty"])
+        self.assertEqual(detail.context["celkem"].nedostatek, radek["nedostatek_minuty"])
+        self.assertEqual(detail.context["celkem"].bilance, radek["bilance_minuty"])
+        self.assertEqual(
+            detail.context["celkem_odpr"], radek["odpracovano_h"] * 60 + radek["odpracovano_m"],
+        )
+        self.assertGreater(detail.context["celkem_odpr"], 0)
+
+    def test_odkaz_v_odboru_je_jen_pro_staff_a_nese_obdobi_a_filtr(self):
+        sekce_pk = self.zam.oddeleni.odbor.sekce.pk
+        odbor = self.client.get(
+            reverse("reports:prehled_tymu"), {"rok": 2026, "mesic": 10, "sekce": sekce_pk},
+        )
+        self.assertContains(odbor, f'href="{self.url}?sekce={sekce_pk}&amp;rok=2026&amp;mesic=10"')
+
+        self.client.force_login(self.zam.user)
+        odbor = self.client.get(reverse("reports:prehled_tymu"), {"rok": 2026, "mesic": 10})
+        self.assertEqual(odbor.status_code, 200)
+        self.assertContains(odbor, self.zam.jmeno)
+        self.assertNotContains(odbor, self.url)
+
+    def test_ne_staff_dostane_403_i_na_vlastni_detail(self):
+        self.client.force_login(self.zam.user)
+        self.assertEqual(self.client.get(self.url, {"rok": 2026, "mesic": 10}).status_code, 403)
+
+    def test_anonym_je_presmerovan_na_prihlaseni(self):
+        self.client.logout()
+        self.assertEqual(self.client.get(self.url).status_code, 302)
+
+    def test_neexistujici_zamestnanec_je_404(self):
+        odpoved = self.client.get(reverse("reports:detail_zamestnance", args=[999999]))
+        self.assertEqual(odpoved.status_code, 404)
+
+    def test_neplatne_obdobi_spadne_na_aktualni_mesic(self):
+        odpoved = self.client.get(self.url, {"rok": "x", "mesic": 99})
+        self.assertEqual(odpoved.status_code, 200)
+        dnes = timezone.localdate()
+        self.assertEqual((odpoved.context["obdobi"].rok, odpoved.context["obdobi"].mesic), (dnes.year, dnes.month))
+
+    def test_zpet_na_odbor_zachova_mesic_a_filtr(self):
+        odpoved = self.client.get(self.url, {"rok": 2026, "mesic": 10, "odbor": 7})
+        self.assertEqual(
+            odpoved.context["url_odboru"], reverse("reports:prehled_tymu") + "?odbor=7&rok=2026&mesic=10",
+        )
+        self.assertContains(odpoved, '<input type="hidden" name="odbor" value="7">')
+
+    def test_mesic_bez_zaznamu_ukaze_prazdny_stav(self):
+        from timetracking.tests import vytvor_zamestnance
+
+        prazdny = vytvor_zamestnance("prazdny123@example.com", "0124")
+        odpoved = self.client.get(
+            reverse("reports:detail_zamestnance", args=[prazdny.pk]), {"rok": 2026, "mesic": 10},
+        )
+        self.assertEqual(odpoved.status_code, 200)
+        self.assertEqual(odpoved.context["dny"], [])
+        self.assertContains(odpoved, "V tomto měsíci nejsou žádné záznamy.")
+
+    def test_otevreny_blok_z_minulosti_je_k_oprave(self):
+        WorkSession.objects.create(employee=self.zam, zacatek=_cas(2026, 10, 7, 8))
+        odpoved = self.client.get(self.url, {"rok": 2026, "mesic": 10})
+        (blok,) = self._den(odpoved, date(2026, 10, 7)).bloky
+        self.assertTrue(blok.k_oprave)
+        self.assertFalse(blok.probiha)
+        self.assertContains(odpoved, "bez odchodu")
+
+    def test_mezera_jedne_minuty_neni_mezera(self):
+        """Stejné pravidlo jako WorkdaySummary.prepocitej(): konec 11:17, začátek 11:18 je jeden blok."""
+        WorkSession.objects.create(
+            employee=self.zam, zacatek=_cas(2026, 10, 8, 8), konec=_cas(2026, 10, 8, 11, 17),
+        )
+        WorkSession.objects.create(
+            employee=self.zam, zacatek=_cas(2026, 10, 8, 11, 18), konec=_cas(2026, 10, 8, 12),
+        )
+        WorkSession.objects.create(
+            employee=self.zam, zacatek=_cas(2026, 10, 8, 12, 2), konec=_cas(2026, 10, 8, 16),
+        )
+        (den,) = [d for d in dny_zamestnance(self.zam, 2026, 10) if d.datum == date(2026, 10, 8)]
+        self.assertEqual([b.mezera_pred for b in den.bloky][:2], [None, None])
+        self.assertEqual(den.bloky[2].mezera_pred.minuty, 2)
+
+    def test_pocet_dotazu_nezavisi_na_poctu_dni(self):
+        def dotazy():
+            with CaptureQueriesContext(connection) as ctx:
+                self.client.get(self.url, {"rok": 2026, "mesic": 10})
+            return len(ctx)
+
+        pred = dotazy()
+        for den in range(19, 24):
+            blok = WorkSession.objects.create(
+                employee=self.zam, zacatek=_cas(2026, 10, den, 8), konec=_cas(2026, 10, den, 16),
+            )
+            Pohyb.objects.create(
+                work_session=blok, typ=self.lekar,
+                zacatek=_cas(2026, 10, den, 10), konec=_cas(2026, 10, den, 11),
+            )
+        self.assertEqual(dotazy(), pred)

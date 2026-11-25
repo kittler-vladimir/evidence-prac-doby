@@ -69,6 +69,12 @@ class Obdobi:
         return self._query()
 
     @property
+    def url_tohoto_mesice(self):
+        """Query string zvoleného měsíce s ostatními parametry (filtr Odboru) — odkazy
+        na podstránky, které se mají vrátit na stejný pohled."""
+        return self._query(self.rok, self.mesic)
+
+    @property
     def roky(self):
         return list(range(self.prvni[0], self.aktualni[0] + 1))
 

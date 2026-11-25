@@ -7,6 +7,12 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 
 
+# Bloky, mezi nimiž je mezera nejvýše jedna zobrazená minuta (konec 11:17, další začátek
+# 11:18), jsou jeden souvislý blok — WorkdaySummary.prepocitej() je spojuje a detail
+# zaměstnance v Odboru (reports.detail) podle téhož pravidla nehlásí mezeru.
+NEJVETSI_SPOJOVANA_MEZERA = timedelta(minutes=1)
+
+
 def popis_intervalu(zacatek, konec):
     """Časový úsek v místním čase pro chybové hlášky, např. "22. 9. 7:59–13:14"
     nebo "21. 9. 6:39 – 22. 9. 7:59" přes půlnoc; otevřený konec jako "(probíhá)"."""
@@ -418,7 +424,7 @@ class WorkdaySummary(models.Model):
         for s in sorted(sessions, key=lambda x: x.zacatek):
             minuta_zacatku = s.zacatek.replace(second=0, microsecond=0)
             minuta_konce = intervaly[-1][1].replace(second=0, microsecond=0) if intervaly else None
-            if intervaly and minuta_zacatku - minuta_konce <= timedelta(minutes=1):
+            if intervaly and minuta_zacatku - minuta_konce <= NEJVETSI_SPOJOVANA_MEZERA:
                 intervaly[-1][1] = max(intervaly[-1][1], s.konec)
             else:
                 intervaly.append([s.zacatek, s.konec])
